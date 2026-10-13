@@ -19,6 +19,7 @@ import {
   applyTheme,
 } from '@/stores/site'
 import { notify } from '@/stores/toast'
+import { confirmDialog } from '@/stores/dialog'
 import { loadPlugins } from '@/lib/plugins'
 import type { InstalledPlugin, LinkItem, ProfileTag } from '@/lib/types'
 
@@ -30,6 +31,19 @@ const tab = ref<(typeof validTabs)[number]>(
 const saving = ref(false)
 const importing = ref(false)
 const importResult = ref<any>(null)
+const backupProgress = reactive<{ active: boolean; value: number | null }>({ active: false, value: null })
+
+function progressShow(value: number | null) {
+  backupProgress.active = true
+  backupProgress.value = value
+}
+function progressFinish() {
+  backupProgress.value = 1
+  setTimeout(() => {
+    backupProgress.active = false
+    backupProgress.value = null
+  }, 500)
+}
 const installedPlugins = ref<InstalledPlugin[]>([])
 const pluginBusy = ref(false)
 
@@ -65,7 +79,15 @@ const themeMode = computed(() => site.site.themeMode || 'preset')
 const themeSource = computed(() => site.site.themeSource || 'icon')
 const github = reactive({ username: '', token: '' })
 const steam = reactive({ steamId: '', apiKey: '' })
-const nintendo = reactive({ friendCode: '', games: [] as { name: string; playtime?: string }[] })
+const nintendo = reactive({
+  friendCode: '',
+  games: [] as { name: string; playtime?: string }[],
+  zncaApiUrl: '',
+  clientId: '',
+  clientSecret: '',
+})
+
+const NSO_DOC_URL = 'https://github.com/YurizonoMika/TrinityBlogFramework#nso-setup'
 const account = reactive({ username: '', currentPassword: '', newPassword: '', confirm: '' })
 
 const nintendoStatus = reactive<{ loading: boolean; linked: boolean; user: any }>({
@@ -124,6 +146,9 @@ async function load() {
   Object.assign(steam, data.integrations.steam || {})
   nintendo.friendCode = data.integrations.nintendo?.friendCode || ''
   nintendo.games = (data.integrations.nintendo?.games || []).map((g) => ({ ...g }))
+  nintendo.zncaApiUrl = data.integrations.nintendo?.zncaApiUrl || 'https://nxapi-znca-api.fancy.org.uk/api/znca'
+  nintendo.clientId = data.integrations.nintendo?.clientId || ''
+  nintendo.clientSecret = data.integrations.nintendo?.clientSecret || ''
   account.username = p.username || ''
 }
 
@@ -405,7 +430,13 @@ async function saveActivity() {
     await saveIntegrations({
       github: { username: github.username, token: github.token },
       steam: { steamId: steam.steamId, apiKey: steam.apiKey },
-      nintendo: { friendCode: nintendo.friendCode, games: nintendo.games },
+      nintendo: {
+        friendCode: nintendo.friendCode,
+        games: nintendo.games,
+        zncaApiUrl: nintendo.zncaApiUrl,
+        clientId: nintendo.clientId,
+        clientSecret: nintendo.clientSecret,
+      },
     })
     notify('活动集成已保存', 'success')
   } catch (e: any) {
@@ -441,25 +472,41 @@ async function saveAccount() {
   }
 }
 
-async function exportBackup() {
-  try {
-    const res = await fetch('/api/backup/export', {
-      headers: { Authorization: `Bearer ${getToken()}` },
-    })
-    if (!res.ok) throw new Error(`导出失败 (${res.status})`)
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `trinity-backup-${new Date().toISOString().slice(0, 10)}.zip`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-    notify('已开始下载备份文件', 'success')
-  } catch (e: any) {
-    notify(e.message || '导出失败', 'error')
-  }
+function exportBackup() {
+  return new Promise<void>((resolve) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', '/api/backup/export')
+    const token = getToken()
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.responseType = 'blob'
+    progressShow(0)
+    xhr.onprogress = (e) => {
+      if (e.lengthComputable) progressShow(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const url = URL.createObjectURL(xhr.response)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `trinity-backup-${new Date().toISOString().slice(0, 10)}.zip`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        URL.revokeObjectURL(url)
+        notify('已开始下载备份文件', 'success')
+      } else {
+        notify(`导出失败 (${xhr.status})`, 'error')
+      }
+      progressFinish()
+      resolve()
+    }
+    xhr.onerror = () => {
+      notify('导出失败', 'error')
+      backupProgress.active = false
+      resolve()
+    }
+    xhr.send()
+  })
 }
 
 async function onImportFile(e: Event) {
@@ -468,30 +515,59 @@ async function onImportFile(e: Event) {
   input.value = ''
   if (!file) return
   if (
-    !window.confirm(
-      '导入将覆盖当前站点的全部数据（设置、账户、帖子、动态与上传文件），且不可撤销。\n确定继续吗？'
-    )
+    !(await confirmDialog({
+      title: '导入数据',
+      message: '导入将覆盖当前站点的全部数据（设置、账户、帖子、动态与上传文件），且不可撤销。确定继续吗？',
+      confirmText: '导入',
+      danger: true,
+    }))
   ) {
     return
   }
+
   importing.value = true
   importResult.value = null
-  try {
-    const form = new FormData()
-    form.append('file', file)
-    const res = await api<{ ok: boolean; counts: any }>('/backup/import', {
-      method: 'POST',
-      body: form,
-      raw: true,
-    })
-    importResult.value = res.counts
-    await loadPublicSite()
-    notify('数据导入成功', 'success')
-  } catch (err: any) {
-    notify(err.message || '导入失败', 'error')
-  } finally {
-    importing.value = false
-  }
+  progressShow(0)
+
+  const form = new FormData()
+  form.append('file', file)
+
+  await new Promise<void>((resolve) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/backup/import')
+    const token = getToken()
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    // upload progress (determinate), then server processing (indeterminate)
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) progressShow(ev.loaded / ev.total)
+    }
+    xhr.upload.onload = () => progressShow(null)
+    xhr.onload = async () => {
+      let data: any = null
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch {
+        data = null
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && data?.ok) {
+        importResult.value = data.counts
+        await loadPublicSite()
+        notify('数据导入成功', 'success')
+      } else {
+        notify(data?.error || `导入失败 (${xhr.status})`, 'error')
+      }
+      progressFinish()
+      importing.value = false
+      resolve()
+    }
+    xhr.onerror = () => {
+      notify('导入失败', 'error')
+      backupProgress.active = false
+      importing.value = false
+      resolve()
+    }
+    xhr.send(form)
+  })
 }
 
 async function loadInstalledPlugins() {
@@ -547,7 +623,7 @@ function togglePermission(p: InstalledPlugin, perm: string) {
 }
 
 async function removePlugin(p: InstalledPlugin) {
-  if (!window.confirm(`确定删除插件「${p.name}」吗？`)) return
+  if (!(await confirmDialog({ title: '删除插件', message: `确定删除插件「${p.name}」吗？`, confirmText: '删除', danger: true }))) return
   try {
     await api(`/plugins/${p.id}`, { method: 'DELETE' })
     installedPlugins.value = installedPlugins.value.filter((x) => x.id !== p.id)
@@ -955,6 +1031,31 @@ const PERMISSION_LABELS: Record<string, string> = {
               <input v-model="g.playtime" class="mini-input" placeholder="时长，如 20 小时" />
               <button class="icon-btn sm" @click="removeGame(i)"><AppIcon name="close" :size="16" /></button>
             </div>
+
+            <div class="divider" />
+            <div class="sub-head">
+              <span class="mini-label">开发者凭据（nxapi znca 代理）</span>
+              <a class="btn btn-outlined btn-sm" :href="NSO_DOC_URL" target="_blank" rel="noopener">
+                <AppIcon name="open_in_new" :size="15" />如何获取？
+              </a>
+            </div>
+            <p class="md-muted tiny" style="margin: 0 0 12px">
+              实时读取 NSO 数据需要 nxapi 代理的客户端凭据。填写后首页活动卡与「Switch 游戏库」才能获取数据。
+            </p>
+            <label class="field filled">
+              <input v-model="nintendo.zncaApiUrl" class="field-input" placeholder=" " />
+              <span class="field-label">znca 代理地址</span>
+            </label>
+            <div class="form-grid">
+              <label class="field filled">
+                <input v-model="nintendo.clientId" class="field-input" placeholder=" " />
+                <span class="field-label">nxapi Client ID</span>
+              </label>
+              <label class="field filled">
+                <input v-model="nintendo.clientSecret" type="password" class="field-input" placeholder=" " />
+                <span class="field-label">nxapi Client Secret（可选）</span>
+              </label>
+            </div>
           </div>
 
           <div class="panel-actions">
@@ -1109,12 +1210,22 @@ const PERMISSION_LABELS: Record<string, string> = {
             将整个站点的数据导出为一个 ZIP 文件，在另一个使用相同软件的站点导入即可完成迁移。
           </p>
 
+          <div
+            class="backup-progress"
+            :class="{ show: backupProgress.active, indeterminate: backupProgress.value === null }"
+          >
+            <div
+              class="backup-progress-fill"
+              :style="{ width: backupProgress.value !== null ? `${Math.max(4, Math.round(backupProgress.value * 100))}%` : '' }"
+            />
+          </div>
+
           <div class="backup-block">
             <h3><AppIcon name="save" :size="18" />导出数据</h3>
             <p class="md-muted tiny">
               包含：站点设置、用户账户（含密码哈希）、帖子、动态、首页卡片，以及全部上传文件。
             </p>
-            <button class="btn btn-filled" @click="exportBackup">
+            <button class="btn btn-filled" :disabled="backupProgress.active" @click="exportBackup">
               <AppIcon name="upload" :size="17" />导出为 ZIP
             </button>
           </div>
@@ -1316,6 +1427,33 @@ const PERMISSION_LABELS: Record<string, string> = {
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
+}
+.backup-progress {
+  height: 4px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-surface-container-highest);
+  overflow: hidden;
+  margin: 4px 0 16px;
+  opacity: 0;
+  transition: opacity var(--md-dur-short) var(--md-ease-standard);
+}
+.backup-progress.show {
+  opacity: 1;
+}
+.backup-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: var(--md-shape-full);
+  background: var(--md-primary);
+  transition: width 0.2s var(--md-ease-standard);
+}
+.backup-progress.indeterminate .backup-progress-fill {
+  width: 40%;
+  animation: backup-indet 1.1s var(--md-ease-standard) infinite;
+}
+@keyframes backup-indet {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
 }
 .backup-block h3 {
   display: flex;

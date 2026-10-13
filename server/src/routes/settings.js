@@ -5,6 +5,7 @@ import { Router } from 'express'
 import { db, getSetting, setSetting } from '../db.js'
 import { requireAuth, hashPassword, verifyPassword, publicUser } from '../auth.js'
 import { extractSeedColor, resolveThemeSource } from '../seed.js'
+import { resetNintendoConfig } from '../nintendo.js'
 
 const router = Router()
 
@@ -75,7 +76,10 @@ router.put('/integrations', requireAuth, (req, res) => {
   for (const key of ['github', 'steam', 'nintendo']) {
     if (incoming[key]) next[key] = { ...(current[key] || {}), ...incoming[key] }
   }
-  res.json({ integrations: setSetting('integrations', next) })
+  const saved = setSetting('integrations', next)
+  // the nxapi client id/secret / proxy URL may have changed
+  resetNintendoConfig()
+  res.json({ integrations: saved })
 })
 
 router.put('/links', requireAuth, (req, res) => {

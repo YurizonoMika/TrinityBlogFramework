@@ -91,6 +91,40 @@ npm start                # 启动后端（同时托管前端与上传文件）
 - 登录入口固定在 **`/teaparty`**（不在页面上暴露链接）。
 - 用户资料、站点外观、活动集成、博客分类、插件、备份均在 **用户设置** 中管理。
 
+<a id="nso-setup"></a>
+
+## 🎮 Nintendo Switch Online（NSO）配置
+
+站点通过 **nxapi** 读取 NSO 数据（活动卡、Switch 游戏库）。由于任天堂的 `f` 参数必须由官方 App 生成，nxapi 官方提供了 **znca API 代理**来生成它；该代理自 2025 年起要求**客户端认证**，因此你需要注册一个客户端并填写 **Client ID / Client Secret**。
+
+### 获取 Client ID / Secret
+
+1. 打开注册页：<https://nxapi-auth.fancy.org.uk/oauth/clients>
+2. 按提示登录，注册一个客户端，**scope 填**：`ca:gf ca:er ca:dr`
+3. 复制返回的 **Client ID**（如有 **Client Secret** 也一并复制）
+
+### 在本站填写
+
+打开 **用户设置 → 活动集成 → Nintendo → 开发者凭据（nxapi znca 代理）**：
+
+| 字段 | 说明 |
+|---|---|
+| znca 代理地址 | 默认 `https://nxapi-znca-api.fancy.org.uk/api/znca`，一般无需修改 |
+| nxapi Client ID | 上一步获取的 Client ID |
+| nxapi Client Secret | 上一步的 Client Secret（若为 public client 可留空） |
+
+保存后，点击「**绑定 Nintendo 账户**」完成任天堂账号授权，首页活动卡与「Switch 游戏库」即可显示数据。
+
+> **也可以用 `server/.env`** 配置（`ZNCA_API_URL` / `NXAPI_ZNCA_API_CLIENT_ID` / `NXAPI_ZNCA_API_CLIENT_SECRET`）；
+> **用户设置里的值优先于 `.env`**。
+
+### 安全说明
+
+- **Client Secret 是敏感信息**，请只填在「用户设置」或 `server/.env`（两者都不会进 Git / 部署包）。
+- **Client ID** 属于公开客户端标识，本身不是密钥。
+- 源码 `server/src/nintendo.js` 里的 `NA_CLIENT_ID = 71b963c1b7b6d119` 是**任天堂官方 NSO App 的公开 client_id**（社区公开常量），并非密钥，无需隐藏。
+- 你的任天堂 `session_token`、GitHub Token、Steam API Key 等全部保存在服务器数据库，不会对外暴露。
+
 ## 🧩 插件系统
 
 插件为 ZIP 包，可由管理员在「用户设置 → 拓展程序」导入、启用/禁用、设置访客可见性与权限。插件可提供：帖子内嵌模块、编辑器小工具、Widgets、页面叠加层、独立页面、卡片数据源。

@@ -128,7 +128,13 @@ export interface SiteSettings {
 export interface Integrations {
   github?: { username?: string; token?: string }
   steam?: { steamId?: string; apiKey?: string }
-  nintendo?: { friendCode?: string; games?: { name: string; playtime?: string }[] }
+  nintendo?: {
+    friendCode?: string
+    games?: { name: string; playtime?: string }[]
+    zncaApiUrl?: string
+    clientId?: string
+    clientSecret?: string
+  }
 }
 
 export interface LinkItem {

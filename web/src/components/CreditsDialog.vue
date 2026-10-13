@@ -64,7 +64,7 @@ const components: Component[] = [
       <span class="credits-license-text">
         本作品为自由软件，可依据 AGPL-3.0 再分发和/或修改；通过网络提供服务时须向使用者提供完整源码。
       </span>
-      <a href="https://github.com/YurizonoMika" target="_blank" rel="noopener">
+      <a href="https://github.com/YurizonoMika/TrinityBlogFramework" target="_blank" rel="noopener">
         获取源代码 <AppIcon name="open_in_new" :size="14" />
       </a>
     </div>

@@ -9,6 +9,7 @@ import ToastHost from './components/ToastHost.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import CreditsDialog from './components/CreditsDialog.vue'
 import PluginOverlay from './components/PluginOverlay.vue'
+import DialogHost from './components/DialogHost.vue'
 import AppIcon from './components/AppIcon.vue'
 import { auth } from '@/stores/auth'
 import { loadPublicSite, applyTheme, site } from '@/stores/site'
@@ -77,6 +78,7 @@ watch(
     <CommandPalette />
     <CreditsDialog :open="creditsOpen" @close="creditsOpen = false" />
     <PluginOverlay />
+    <DialogHost />
   </div>
 </template>
 
