@@ -273,7 +273,7 @@ async function doDelete() {
   flex-wrap: wrap;
 }
 .post-body {
-  padding: 48px 0 80px;
+  padding: clamp(32px, 6vw, 56px) 0 clamp(48px, 10vw, 96px);
   max-width: 800px;
 }
 .md-content {

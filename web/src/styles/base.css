@@ -122,12 +122,23 @@ select {
 }
 
 .md-container {
-  width: min(1180px, 100% - 32px);
+  width: min(1200px, 100% - (var(--page-gutter, 24px) * 2));
   margin-inline: auto;
 }
 
 @media (max-width: 640px) {
-  .md-container {
-    width: min(1180px, 100% - 24px);
+  body {
+    font-size: 14.5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

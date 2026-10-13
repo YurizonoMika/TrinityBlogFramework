@@ -405,7 +405,7 @@ function goBack() {
 
 <style scoped>
 .editor-page {
-  padding: 32px 0 80px;
+  padding: clamp(24px, 4vw, 40px) 0 clamp(48px, 10vw, 96px);
 }
 .editor-head {
   display: flex;

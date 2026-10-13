@@ -180,7 +180,7 @@ function statusLabel(s: Post['status']) {
 
 <style scoped>
 .blog {
-  padding: 40px 0 80px;
+  padding: var(--section-space, 40px) 0 clamp(48px, 10vw, 96px);
 }
 .blog-head {
   display: flex;
@@ -231,8 +231,8 @@ function statusLabel(s: Post['status']) {
 }
 .post-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: clamp(16px, 2vw, 24px);
 }
 .post-card {
   display: flex;

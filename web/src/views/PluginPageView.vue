@@ -30,7 +30,7 @@ const page = computed(() => plugin.value?.pages.find((p) => p.id === String(rout
 
 <style scoped>
 .plugin-page {
-  padding: 40px 0 80px;
+  padding: var(--section-space, 40px) 0 clamp(48px, 10vw, 96px);
 }
 .plugin-page-head {
   margin-bottom: 24px;

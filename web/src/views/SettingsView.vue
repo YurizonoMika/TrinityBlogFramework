@@ -1151,17 +1151,24 @@ const PERMISSION_LABELS: Record<string, string> = {
 
 <style scoped>
 .settings {
-  padding: 40px 0 80px;
+  padding: var(--section-space, 40px) 0 clamp(48px, 10vw, 96px);
 }
 .settings-head h1 {
   margin: 2px 0 6px;
 }
 .settings-layout {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 220px minmax(0, 1fr);
   gap: 28px;
   margin-top: 28px;
   align-items: start;
+}
+.settings-panel {
+  min-width: 0;
+}
+.settings-panel .card {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .settings-nav {
   display: flex;
@@ -1169,6 +1176,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   gap: 4px;
   position: sticky;
   top: 88px;
+  min-width: 0;
 }
 .nav-item {
   display: flex;
@@ -1208,7 +1216,7 @@ const PERMISSION_LABELS: Record<string, string> = {
 }
 .form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 .avatar-row {
@@ -1274,6 +1282,7 @@ const PERMISSION_LABELS: Record<string, string> = {
 }
 .link-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   margin-bottom: 10px;

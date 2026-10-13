@@ -2,7 +2,7 @@
 <!-- Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika) -->
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import { auth, logout } from '@/stores/auth'
@@ -17,6 +17,15 @@ const accountOpen = ref(false)
 const mobileOpen = ref(false)
 const accountRef = ref<HTMLElement | null>(null)
 
+// dynamic nav collapse: if the nav can't fit on one line, show a menu instead
+const topbarInner = ref<HTMLElement | null>(null)
+const navMeasure = ref<HTMLElement | null>(null)
+const brandRef = ref<HTMLElement | null>(null)
+const searchRef = ref<HTMLElement | null>(null)
+const actionsRef = ref<HTMLElement | null>(null)
+const collapsed = ref(false)
+let resizeObserver: ResizeObserver | null = null
+
 const title = computed(() => site.site.title || '我的主页')
 const logo = computed(() => site.site.icon || '/favicon.svg')
 const pluginPages = computed(() =>
@@ -24,10 +33,30 @@ const pluginPages = computed(() =>
     (p.pages || []).map((pg) => ({ path: `/p/${p.id}/${pg.id}`, title: pg.title, icon: pg.icon || 'extension' }))
   )
 )
+const navItems = computed(() => [
+  { path: '/', title: '首页', icon: 'home' },
+  { path: '/blog', title: '博客', icon: 'article' },
+  { path: '/moments', title: '动态', icon: 'chat' },
+  ...pluginPages.value,
+])
 const initial = computed(() => {
   const name = site.profile?.display_name || auth.user?.display_name || 'A'
   return name.trim().charAt(0).toUpperCase()
 })
+
+function measure() {
+  const bar = topbarInner.value
+  const nav = navMeasure.value
+  if (!bar || !nav) return
+  const need = nav.offsetWidth
+  if (!need) return
+  const others =
+    (brandRef.value?.offsetWidth || 0) +
+    (searchRef.value?.offsetWidth || 0) +
+    (actionsRef.value?.offsetWidth || 0) +
+    72
+  collapsed.value = bar.clientWidth - others < need
+}
 
 function isActive(path: string) {
   if (path === '/') return route.path === '/'
@@ -47,47 +76,62 @@ function doLogout() {
   router.push('/')
 }
 
-onMounted(() => document.addEventListener('click', onDocClick))
-onUnmounted(() => document.removeEventListener('click', onDocClick))
+watch(
+  () => [navItems.value.length, title.value].join(),
+  () => nextTick(measure)
+)
+
+onMounted(() => {
+  document.addEventListener('click', onDocClick)
+  if (typeof ResizeObserver !== 'undefined' && topbarInner.value) {
+    resizeObserver = new ResizeObserver(() => measure())
+    resizeObserver.observe(topbarInner.value)
+  }
+  window.addEventListener('resize', measure)
+  nextTick(measure)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', onDocClick)
+  resizeObserver?.disconnect()
+  window.removeEventListener('resize', measure)
+})
 </script>
 
 <template>
   <header class="topbar">
-    <div class="md-container topbar-inner">
-      <router-link class="brand" to="/" @click="mobileOpen = false">
+    <div ref="topbarInner" class="md-container topbar-inner">
+      <router-link ref="brandRef" class="brand" to="/" @click="mobileOpen = false">
         <img class="brand-logo" :src="logo" alt="" />
         <span class="brand-name">{{ title }}</span>
       </router-link>
 
-      <nav class="nav">
-        <router-link to="/" :class="{ active: isActive('/') }">
-          <AppIcon name="home" :size="18" /><span>首页</span>
-        </router-link>
-        <router-link to="/blog" :class="{ active: isActive('/blog') }">
-          <AppIcon name="article" :size="18" /><span>博客</span>
-        </router-link>
-        <router-link to="/moments" :class="{ active: isActive('/moments') }">
-          <AppIcon name="chat" :size="18" /><span>动态</span>
-        </router-link>
+      <nav v-show="!collapsed" class="nav">
         <router-link
-          v-for="pg in pluginPages"
-          :key="pg.path"
-          :to="pg.path"
-          :class="{ active: isActive(pg.path) }"
+          v-for="item in navItems"
+          :key="item.path"
+          :to="item.path"
+          :class="{ active: isActive(item.path) }"
         >
-          <AppIcon :name="pg.icon" :size="18" /><span>{{ pg.title }}</span>
+          <AppIcon :name="item.icon" :size="18" /><span>{{ item.title }}</span>
         </router-link>
+      </nav>
+
+      <!-- hidden copy used to measure the nav's natural width -->
+      <nav ref="navMeasure" class="nav nav-measure" aria-hidden="true">
+        <a v-for="item in navItems" :key="item.path">
+          <AppIcon :name="item.icon" :size="18" /><span>{{ item.title }}</span>
+        </a>
       </nav>
 
       <div class="spacer" />
 
-      <button class="search-trigger" type="button" @click="openPalette()">
+      <button ref="searchRef" class="search-trigger" type="button" @click="openPalette()">
         <AppIcon name="search" :size="18" />
         <span class="search-label">搜索与快捷指令</span>
         <kbd class="search-kbd">⌘K</kbd>
       </button>
 
-      <div class="actions">
+      <div ref="actionsRef" class="actions">
         <button class="icon-btn" :title="site.theme === 'dark' ? '浅色模式' : '深色模式'" @click="toggleTheme">
           <AppIcon :name="site.theme === 'dark' ? 'light_mode' : 'dark_mode'" :size="20" />
         </button>
@@ -120,31 +164,22 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
           </div>
         </div>
 
-        <button class="icon-btn mobile-toggle" @click="mobileOpen = !mobileOpen">
+        <button v-show="collapsed" class="icon-btn mobile-toggle" @click="mobileOpen = !mobileOpen">
           <AppIcon :name="mobileOpen ? 'close' : 'menu'" :size="22" />
         </button>
       </div>
     </div>
 
     <transition name="drawer">
-      <div v-if="mobileOpen" class="mobile-nav md-container">
-        <router-link to="/" :class="{ active: isActive('/') }" @click="mobileOpen = false">
-          <AppIcon name="home" :size="18" />首页
-        </router-link>
-        <router-link to="/blog" :class="{ active: isActive('/blog') }" @click="mobileOpen = false">
-          <AppIcon name="article" :size="18" />博客
-        </router-link>
-        <router-link to="/moments" :class="{ active: isActive('/moments') }" @click="mobileOpen = false">
-          <AppIcon name="chat" :size="18" />动态
-        </router-link>
+      <div v-if="collapsed && mobileOpen" class="mobile-nav md-container">
         <router-link
-          v-for="pg in pluginPages"
-          :key="pg.path"
-          :to="pg.path"
-          :class="{ active: isActive(pg.path) }"
+          v-for="item in navItems"
+          :key="item.path"
+          :to="item.path"
+          :class="{ active: isActive(item.path) }"
           @click="mobileOpen = false"
         >
-          <AppIcon :name="pg.icon" :size="18" />{{ pg.title }}
+          <AppIcon :name="item.icon" :size="18" />{{ item.title }}
         </router-link>
         <router-link v-if="auth.user" to="/settings" @click="mobileOpen = false">
           <AppIcon name="settings" :size="18" />用户设置
@@ -176,6 +211,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   color: var(--md-on-surface);
   font-weight: 700;
   font-size: 1.12rem;
@@ -184,6 +220,11 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 }
 .brand:hover {
   text-decoration: none;
+}
+.brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .brand-logo {
   width: 38px;
@@ -199,14 +240,25 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 }
 .nav {
   display: flex;
+  flex: none;
+  flex-wrap: nowrap;
   gap: 4px;
   margin-left: 18px;
+  white-space: nowrap;
+}
+.nav-measure {
+  position: absolute;
+  top: 0;
+  left: -99999px;
+  visibility: hidden;
+  pointer-events: none;
 }
 .nav a,
 .mobile-nav a {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex: none;
   padding: 0 16px;
   height: 40px;
   border-radius: var(--md-shape-full);
@@ -214,6 +266,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
   font-weight: 600;
   font-size: 0.92rem;
   text-decoration: none;
+  white-space: nowrap;
   transition: background-color var(--md-dur-short) var(--md-ease-standard);
 }
 .nav a:hover,
@@ -294,10 +347,10 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
   font-size: 0.8rem;
 }
 .mobile-toggle {
-  display: none;
+  display: inline-grid;
 }
 .mobile-nav {
-  display: none;
+  display: flex;
   flex-direction: column;
   gap: 4px;
   padding-bottom: 12px;
@@ -307,7 +360,6 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 }
 
 @media (max-width: 760px) {
-  .nav,
   .write-btn {
     display: none;
   }
@@ -322,17 +374,8 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
   .search-kbd {
     display: none;
   }
-  .mobile-toggle {
-    display: inline-grid;
-  }
-  .mobile-nav {
-    display: flex;
-  }
   .brand-name {
     max-width: 40vw;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 }
 

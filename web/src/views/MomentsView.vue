@@ -254,7 +254,7 @@ function openLightbox(images: string[], index: number) {
 
 <style scoped>
 .moments-page {
-  padding: 40px 0 80px;
+  padding: var(--section-space, 40px) 0 clamp(48px, 10vw, 96px);
 }
 .moments-head {
   display: flex;
@@ -268,8 +268,8 @@ function openLightbox(images: string[], index: number) {
   margin: 2px 0 4px;
 }
 .moments-grid {
-  columns: 3 320px;
-  column-gap: 20px;
+  columns: 3 300px;
+  column-gap: clamp(16px, 2vw, 24px);
 }
 .moment-card {
   break-inside: avoid;

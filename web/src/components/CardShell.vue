@@ -81,21 +81,22 @@ const TYPE_META: Record<string, { icon: string; label: string }> = {
 
 <style scoped>
 .card-shell {
-  grid-column: span 6;
+  flex: 1 1 var(--card-basis, 44%);
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--md-surface-container-low);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent);
-  border-radius: var(--md-shape-2xl);
-  padding: 20px;
-  min-width: 0;
+  border-radius: var(--fluid-radius, var(--md-shape-2xl));
+  padding: clamp(16px, 1.6vw, 22px);
   transition: box-shadow var(--md-dur-medium) var(--md-ease-standard),
     transform var(--md-dur-medium) var(--md-ease-expressive),
+    border-radius var(--md-dur-medium) var(--md-ease-expressive),
     border-color var(--md-dur-medium) var(--md-ease-standard),
     opacity var(--md-dur-medium) var(--md-ease-standard);
 }
 .card-shell.full {
-  grid-column: span 12;
+  flex-basis: 100%;
 }
 .card-shell.editing {
   cursor: grab;
@@ -163,10 +164,5 @@ const TYPE_META: Record<string, { icon: string; label: string }> = {
 .card-body {
   flex: 1;
   min-width: 0;
-}
-@media (max-width: 820px) {
-  .card-shell {
-    grid-column: span 12;
-  }
 }
 </style>

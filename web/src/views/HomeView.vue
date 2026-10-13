@@ -253,7 +253,7 @@ function toggleProvider(p: string) {
       </div>
 
       <div v-if="loading" class="card-grid">
-        <div v-for="i in 3" :key="i" class="skeleton" style="height: 220px; border-radius: 24px" />
+        <div v-for="i in 3" :key="i" class="skeleton-card skeleton" />
       </div>
 
       <div v-else class="card-grid">
@@ -474,7 +474,7 @@ function toggleProvider(p: string) {
 
 <style scoped>
 .home-body {
-  padding: 40px 0 80px;
+  padding: var(--section-space, 40px) 0 clamp(48px, 10vw, 96px);
 }
 .section-bar {
   display: flex;
@@ -490,11 +490,19 @@ function toggleProvider(p: string) {
 .layout-tools {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .card-grid {
-  display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  gap: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(16px, 2vw, 24px);
+  align-items: flex-start;
+}
+.skeleton-card {
+  flex: 1 1 var(--card-basis, 44%);
+  min-width: 0;
+  height: 220px;
+  border-radius: var(--fluid-radius, 24px);
 }
 .form-row {
   display: flex;
