@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# build output
+web/dist/
+
+# example plugins (framework repo only ships the core)
+examples/
+
+# runtime data (SQLite database + WAL files)
+server/data/
+
+# installed plugins (runtime)
+server/plugins/
+
+# uploaded images
+server/uploads/*
+!server/uploads/.gitkeep
+
+# archives
+*.zip
+
+# env & logs
+.env
+*.log
+npm-debug.log*
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.local

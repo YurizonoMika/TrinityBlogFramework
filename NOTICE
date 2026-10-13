@@ -1,0 +1,38 @@
+Trinity Blog Framework
+Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
+
+This project is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version.
+
+This project is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+The full license text is available in the LICENSE file.
+
+--------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------
+This project includes or depends on third-party open source software.
+A complete list of components and their licenses, together with the full
+license texts, is provided in THIRD-PARTY-LICENSES.md.
+
+Notable components:
+
+  nxapi (Nintendo Switch Online API) ...... AGPL-3.0-or-later
+  sharp / libvips ......................... Apache-2.0 / LGPL-3.0-or-later
+  @material/material-color-utilities ...... Apache-2.0
+  Vue / Vue Router / Vite / marked / Cropper.js ... MIT
+  DOMPurify ............................... MPL-2.0 OR Apache-2.0
+  Express / jsonwebtoken / bcryptjs / Multer ... MIT
+
+Material Design is a design language developed by Google.
+
+Nintendo Switch and Nintendo Switch Online are trademarks of Nintendo.
+This project is not affiliated with, endorsed by, or sponsored by Nintendo.

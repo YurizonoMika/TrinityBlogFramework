@@ -1,0 +1,170 @@
+/* ============================================================
+   Material Design 3 — Expressive design tokens
+   ============================================================ */
+
+:root {
+  /* shape */
+  --md-shape-xs: 4px;
+  --md-shape-sm: 8px;
+  --md-shape-md: 12px;
+  --md-shape-lg: 16px;
+  --md-shape-xl: 24px;
+  --md-shape-2xl: 28px;
+  --md-shape-3xl: 36px;
+  --md-shape-full: 999px;
+
+  /* motion */
+  --md-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --md-ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --md-ease-expressive: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --md-dur-short: 160ms;
+  --md-dur-medium: 320ms;
+  --md-dur-long: 520ms;
+
+  /* elevation */
+  --md-elev-0: none;
+  --md-elev-1: 0 1px 2px 0 rgb(0 0 0 / 0.3), 0 1px 3px 1px rgb(0 0 0 / 0.12);
+  --md-elev-2: 0 1px 2px 0 rgb(0 0 0 / 0.3), 0 2px 6px 2px rgb(0 0 0 / 0.12);
+  --md-elev-3: 0 1px 3px 0 rgb(0 0 0 / 0.3), 0 4px 8px 3px rgb(0 0 0 / 0.12);
+  --md-elev-4: 0 2px 3px 0 rgb(0 0 0 / 0.3), 0 6px 10px 4px rgb(0 0 0 / 0.12);
+  --md-elev-5: 0 4px 4px 0 rgb(0 0 0 / 0.3), 0 8px 12px 6px rgb(0 0 0 / 0.12);
+
+  /* type */
+  --md-font: 'Roboto Flex', 'Roboto', system-ui, -apple-system, 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --md-font-mono: 'Roboto Mono', ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+}
+
+/* ---------- accent palettes: light ---------- */
+:root,
+[data-accent='violet'] {
+  --p: #6750a4; --op: #ffffff; --pc: #eaddff; --opc: #21005d;
+  --s: #625b71; --os: #ffffff; --sc: #e8def8; --osc: #1d192b;
+  --t: #7d5260; --ot: #ffffff; --tc: #ffd8e4; --otc: #31111d;
+}
+[data-accent='blue'] {
+  --p: #0b57d0; --op: #ffffff; --pc: #d3e3fd; --opc: #041e49;
+  --s: #00639b; --os: #ffffff; --sc: #cfe5ff; --osc: #001d35;
+  --t: #0061a4; --ot: #ffffff; --tc: #d1e4ff; --otc: #001d36;
+}
+[data-accent='green'] {
+  --p: #2e6c3f; --op: #ffffff; --pc: #b6f1bf; --opc: #002109;
+  --s: #506350; --os: #ffffff; --sc: #d3e8d1; --osc: #0d1f0f;
+  --t: #3b6470; --ot: #ffffff; --tc: #beeaf7; --otc: #001f27;
+}
+[data-accent='orange'] {
+  --p: #8b5000; --op: #ffffff; --pc: #ffdcbe; --opc: #2d1600;
+  --s: #725b3d; --os: #ffffff; --sc: #ffddb0; --osc: #281800;
+  --t: #66597c; --ot: #ffffff; --tc: #ecdcff; --otc: #211a34;
+}
+[data-accent='pink'] {
+  --p: #a3306e; --op: #ffffff; --pc: #ffd8e8; --opc: #3e0023;
+  --s: #8a4a5e; --os: #ffffff; --sc: #ffd9e2; --osc: #360b1d;
+  --t: #7c4d7d; --ot: #ffffff; --tc: #ffd7fa; --otc: #310b34;
+}
+[data-accent='teal'] {
+  --p: #006a6a; --op: #ffffff; --pc: #9cf1f0; --opc: #002020;
+  --s: #4a6363; --os: #ffffff; --sc: #cce8e7; --osc: #051f1f;
+  --t: #4b607c; --ot: #ffffff; --tc: #d3e4ff; --otc: #041c35;
+}
+[data-accent='red'] {
+  --p: #b3261e; --op: #ffffff; --pc: #f9dedc; --opc: #410e0b;
+  --s: #775652; --os: #ffffff; --sc: #ffdad6; --osc: #2c1512;
+  --t: #6d5677; --ot: #ffffff; --tc: #f6d9ff; --otc: #271430;
+}
+[data-accent='cyan'] {
+  --p: #006874; --op: #ffffff; --pc: #97f0ff; --opc: #001f24;
+  --s: #4a6267; --os: #ffffff; --sc: #cde7ec; --osc: #051f23;
+  --t: #4f5f7e; --ot: #ffffff; --tc: #d7e2ff; --otc: #081a34;
+}
+[data-accent='lime'] {
+  --p: #3f6a00; --op: #ffffff; --pc: #b9f36f; --opc: #102000;
+  --s: #566249; --os: #ffffff; --sc: #d9e7c8; --osc: #131f0b;
+  --t: #3a656f; --ot: #ffffff; --tc: #beeaf5; --otc: #001f26;
+}
+
+/* ---------- semantic roles: light ---------- */
+:root {
+  --md-primary: var(--p);
+  --md-on-primary: var(--op);
+  --md-primary-container: var(--pc);
+  --md-on-primary-container: var(--opc);
+  --md-secondary: var(--s);
+  --md-on-secondary: var(--os);
+  --md-secondary-container: var(--sc);
+  --md-on-secondary-container: var(--osc);
+  --md-tertiary: var(--t);
+  --md-on-tertiary: var(--ot);
+  --md-tertiary-container: var(--tc);
+  --md-on-tertiary-container: var(--otc);
+
+  --md-error: #b3261e;
+  --md-on-error: #ffffff;
+  --md-error-container: #f9dedc;
+  --md-on-error-container: #410e0b;
+  --md-success: #2e6c3f;
+  --md-success-container: #b6f1bf;
+  --md-on-success-container: #002109;
+
+  --md-surface: #fdf7ff;
+  --md-on-surface: #1d1b20;
+  --md-surface-variant: #e7e0ec;
+  --md-on-surface-variant: #49454f;
+  --md-surface-container-lowest: #ffffff;
+  --md-surface-container-low: #f7f2fa;
+  --md-surface-container: #f2ecf4;
+  --md-surface-container-high: #ece6f0;
+  --md-surface-container-highest: #e6e0e9;
+  --md-surface-dim: #ded8e1;
+
+  --md-outline: #75707b;
+  --md-outline-variant: #cac4d0;
+  --md-inverse-surface: #322f35;
+  --md-inverse-on-surface: #f5eff7;
+  --md-inverse-primary: #d0bcff;
+  --md-scrim: rgb(0 0 0 / 0.45);
+  --md-shadow: rgb(0 0 0 / 0.22);
+}
+
+/* ---------- dark ---------- */
+[data-theme='dark'] {
+  --md-primary: color-mix(in srgb, var(--p) 42%, #ffffff);
+  --md-on-primary: color-mix(in srgb, var(--opc) 78%, #000000);
+  --md-primary-container: color-mix(in srgb, var(--p) 62%, #000000);
+  --md-on-primary-container: color-mix(in srgb, var(--pc) 88%, #ffffff);
+  --md-secondary: color-mix(in srgb, var(--s) 40%, #ffffff);
+  --md-on-secondary: color-mix(in srgb, var(--osc) 78%, #000000);
+  --md-secondary-container: color-mix(in srgb, var(--s) 58%, #000000);
+  --md-on-secondary-container: color-mix(in srgb, var(--sc) 88%, #ffffff);
+  --md-tertiary: color-mix(in srgb, var(--t) 40%, #ffffff);
+  --md-on-tertiary: color-mix(in srgb, var(--otc) 78%, #000000);
+  --md-tertiary-container: color-mix(in srgb, var(--t) 58%, #000000);
+  --md-on-tertiary-container: color-mix(in srgb, var(--tc) 88%, #ffffff);
+
+  --md-error: #f2b8b5;
+  --md-on-error: #601410;
+  --md-error-container: #8c1d18;
+  --md-on-error-container: #f9dedc;
+  --md-success: #9bd6a6;
+  --md-success-container: #20512f;
+  --md-on-success-container: #b6f1bf;
+
+  --md-surface: #131016;
+  --md-on-surface: #e8e1ea;
+  --md-surface-variant: #49454f;
+  --md-on-surface-variant: #cbc4cf;
+  --md-surface-container-lowest: #0d0b10;
+  --md-surface-container-low: #1c1920;
+  --md-surface-container: #201d24;
+  --md-surface-container-high: #2b2830;
+  --md-surface-container-highest: #36323b;
+  --md-surface-dim: #131016;
+
+  --md-outline: #948f99;
+  --md-outline-variant: #49454f;
+  --md-inverse-surface: #e8e1ea;
+  --md-inverse-on-surface: #322f35;
+  --md-inverse-primary: var(--p);
+  --md-scrim: rgb(0 0 0 / 0.6);
+  --md-shadow: rgb(0 0 0 / 0.5);
+}
