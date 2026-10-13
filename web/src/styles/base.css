@@ -45,6 +45,20 @@ img {
   display: block;
 }
 
+/* global image loading animation (see lib/imageFx.ts) */
+img.img-fx {
+  opacity: 0;
+  transition: opacity 0.45s var(--md-ease-standard);
+}
+img.img-fx-loaded {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  img.img-fx {
+    transition: none;
+  }
+}
+
 button,
 input,
 textarea,
