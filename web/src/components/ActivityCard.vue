@@ -113,16 +113,27 @@ const steamGames = computed(() => (current.value as any)?.games || [])
           <div class="stat"><strong>{{ (current as any).followers }}</strong><span>关注者</span></div>
           <div class="stat"><strong>{{ (current as any).following }}</strong><span>正在关注</span></div>
         </div>
-        <ul class="event-list">
-          <li v-for="ev in (current as any).events" :key="ev.id">
-            <span class="dot" />
-            <div>
-              <p><strong>{{ ev.repo }}</strong> · {{ ev.action }}</p>
-              <time class="md-muted">{{ formatRelative(ev.createdAt) }}</time>
-            </div>
-          </li>
-          <li v-if="!((current as any).events || []).length" class="muted-line">暂无公开动态</li>
-        </ul>
+
+        <a
+          v-if="(current as any).latestCommit"
+          class="commit-card"
+          :href="(current as any).latestCommit.url"
+          target="_blank"
+          rel="noopener"
+        >
+          <span class="commit-icon"><AppIcon name="code" :size="18" /></span>
+          <div class="commit-main">
+            <p class="commit-msg">{{ (current as any).latestCommit.message }}</p>
+            <span class="md-muted">
+              {{ (current as any).latestCommit.repo }}
+              · {{ (current as any).latestCommit.count }} 个提交
+              · {{ (current as any).latestCommit.sha }}
+              · {{ formatRelative((current as any).latestCommit.date) }}
+            </span>
+          </div>
+          <AppIcon class="commit-out" name="open_in_new" :size="16" />
+        </a>
+        <div v-else class="muted-line">暂无公开提交</div>
       </template>
 
       <!-- Steam -->
@@ -226,6 +237,53 @@ const steamGames = computed(() => (current.value as any)?.games || [])
 .stat span {
   font-size: 0.76rem;
   color: var(--md-on-surface-variant);
+}
+.commit-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--md-shape-lg);
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface);
+  text-decoration: none;
+  transition: transform var(--md-dur-short) var(--md-ease-expressive),
+    background-color var(--md-dur-short) var(--md-ease-standard);
+}
+.commit-card:hover {
+  text-decoration: none;
+  transform: translateX(4px);
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+}
+.commit-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--md-shape-sm);
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  flex: none;
+}
+.commit-main {
+  flex: 1;
+  min-width: 0;
+}
+.commit-msg {
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.commit-main .md-muted {
+  font-size: 0.74rem;
+}
+.commit-out {
+  flex: none;
+  opacity: 0.5;
 }
 .event-list,
 .game-list {

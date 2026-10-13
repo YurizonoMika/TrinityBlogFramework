@@ -37,7 +37,7 @@ async function githubActivity(cfg) {
       const [user, events] = await Promise.all([
         fetchJson(`https://api.github.com/users/${encodeURIComponent(username)}`, headers),
         fetchJson(
-          `https://api.github.com/users/${encodeURIComponent(username)}/events/public?per_page=10`,
+          `https://api.github.com/users/${encodeURIComponent(username)}/events/public?per_page=30`,
           headers
         ),
       ])
@@ -51,6 +51,7 @@ async function githubActivity(cfg) {
         repos: user.public_repos,
         followers: user.followers,
         following: user.following,
+        latestCommit: await findLatestCommit(events, headers),
         events: events.slice(0, 8).map((e) => ({
           id: e.id,
           type: e.type,
@@ -65,10 +66,65 @@ async function githubActivity(cfg) {
   }
 }
 
+function pushCount(payload) {
+  if (!payload) return 0
+  if (Array.isArray(payload.commits) && payload.commits.length) return payload.commits.length
+  return Number(payload.distinct_size || payload.size || 0)
+}
+
+/**
+ * Newest commit from the user's latest public PushEvent.
+ * GitHub's public events API no longer includes the commit list / size, so the
+ * message and commit count are fetched from the commits + compare APIs.
+ */
+async function findLatestCommit(events, headers) {
+  for (const e of events) {
+    if (e.type !== 'PushEvent') continue
+    const repo = e.repo?.name
+    const head = e.payload?.head
+    const before = e.payload?.before
+    if (!repo || !head) continue
+
+    const result = {
+      repo,
+      sha: String(head).slice(0, 7),
+      fullSha: String(head),
+      message: '(no message)',
+      url: `https://github.com/${repo}/commit/${head}`,
+      branch: String(e.payload?.ref || '').replace('refs/heads/', ''),
+      date: e.created_at,
+      count: 1,
+    }
+
+    try {
+      const c = await fetchJson(`https://api.github.com/repos/${repo}/commits/${head}`, headers)
+      result.message = String(c.commit?.message || '').split('\n')[0] || '(no message)'
+      result.url = c.html_url || result.url
+      result.date = c.commit?.author?.date || result.date
+    } catch {
+      /* rate limited or unavailable — keep the fallback */
+    }
+
+    if (before && !/^0+$/.test(before)) {
+      try {
+        const cmp = await fetchJson(
+          `https://api.github.com/repos/${repo}/compare/${before}...${head}`,
+          headers
+        )
+        result.count = Number(cmp.total_commits || (cmp.commits ? cmp.commits.length : 0)) || 1
+      } catch {
+        /* keep count = 1 */
+      }
+    }
+    return result
+  }
+  return null
+}
+
 function describeEvent(e) {
   switch (e.type) {
     case 'PushEvent':
-      return `推送了 ${e.payload?.commits?.length || 0} 个提交到 ${e.payload?.ref?.replace('refs/heads/', '')}`
+      return `推送了 ${pushCount(e.payload)} 个提交到 ${e.payload?.ref?.replace('refs/heads/', '')}`
     case 'PullRequestEvent':
       return `${e.payload?.action} PR #${e.payload?.number}`
     case 'IssuesEvent':

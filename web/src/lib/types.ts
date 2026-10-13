@@ -163,6 +163,16 @@ export interface ActivityGithub {
   followers?: number
   following?: number
   events?: { id: string; type: string; repo: string; createdAt: string; action: string }[]
+  latestCommit?: {
+    repo: string
+    sha: string
+    fullSha: string
+    message: string
+    url: string
+    branch: string
+    date: string
+    count: number
+  } | null
   error?: string
 }
 

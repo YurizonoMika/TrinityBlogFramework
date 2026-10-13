@@ -365,7 +365,7 @@ export async function getNintendoActivity({ force = false } = {}) {
       user,
       friendCode: user.friendCode,
       recent,
-      recentGames: recentGames.slice(0, 6),
+      recentGames: recentGames.slice(0, 20),
       nowPlaying,
     }
 
