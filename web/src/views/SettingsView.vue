@@ -85,6 +85,9 @@ const nintendo = reactive({
   zncaApiUrl: '',
   clientId: '',
   clientSecret: '',
+  provider: 'auto' as 'auto' | 'imink' | 'flapg',
+  remoteConfig: false,
+  configUrl: '',
 })
 
 const NSO_DOC_URL = 'https://github.com/YurizonoMika/TrinityBlogFramework#nso-setup'
@@ -149,6 +152,9 @@ async function load() {
   nintendo.zncaApiUrl = data.integrations.nintendo?.zncaApiUrl || 'https://nxapi-znca-api.fancy.org.uk/api/znca'
   nintendo.clientId = data.integrations.nintendo?.clientId || ''
   nintendo.clientSecret = data.integrations.nintendo?.clientSecret || ''
+  nintendo.provider = data.integrations.nintendo?.provider || 'auto'
+  nintendo.remoteConfig = data.integrations.nintendo?.remoteConfig === true
+  nintendo.configUrl = data.integrations.nintendo?.configUrl || ''
   account.username = p.username || ''
 }
 
@@ -436,6 +442,9 @@ async function saveActivity() {
         zncaApiUrl: nintendo.zncaApiUrl,
         clientId: nintendo.clientId,
         clientSecret: nintendo.clientSecret,
+        provider: nintendo.provider,
+        remoteConfig: nintendo.remoteConfig,
+        configUrl: nintendo.configUrl,
       },
     })
     notify('活动集成已保存', 'success')
@@ -1056,6 +1065,32 @@ const PERMISSION_LABELS: Record<string, string> = {
                 <span class="field-label">nxapi Client Secret（可选）</span>
               </label>
             </div>
+
+            <div class="divider" />
+            <div class="sub-head">
+              <span class="mini-label">高级选项</span>
+            </div>
+            <label class="field filled">
+              <select v-model="nintendo.provider" class="field-input">
+                <option value="auto">自动（有代理地址则用代理，否则 imink）</option>
+                <option value="imink">imink</option>
+                <option value="flapg">flapg</option>
+              </select>
+              <span class="field-label">f 参数生成方式</span>
+            </label>
+            <div class="theme-row" style="margin: 8px 0 18px">
+              <span class="mini-label" style="margin: 0">
+                使用 nxapi 远程配置（会禁用直连认证，一般保持关闭）
+              </span>
+              <label class="switch">
+                <input type="checkbox" v-model="nintendo.remoteConfig" />
+                <span class="switch-track"><span class="switch-thumb" /></span>
+              </label>
+            </div>
+            <label class="field filled">
+              <input v-model="nintendo.configUrl" class="field-input" placeholder=" " />
+              <span class="field-label">自定义 nxapi 配置地址（可留空，支持 file:// 或 http(s)://）</span>
+            </label>
           </div>
 
           <div class="panel-actions">

@@ -134,6 +134,9 @@ export interface Integrations {
     zncaApiUrl?: string
     clientId?: string
     clientSecret?: string
+    provider?: 'auto' | 'imink' | 'flapg'
+    remoteConfig?: boolean
+    configUrl?: string
   }
 }
 

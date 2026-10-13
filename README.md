@@ -115,12 +115,13 @@ npm start                # 启动后端（同时托管前端与上传文件）
 
 保存后，点击「**绑定 Nintendo 账户**」完成任天堂账号授权，首页活动卡与「Switch 游戏库」即可显示数据。
 
-> **也可以用 `server/.env`** 配置（`ZNCA_API_URL` / `NXAPI_ZNCA_API_CLIENT_ID` / `NXAPI_ZNCA_API_CLIENT_SECRET`）；
-> **用户设置里的值优先于 `.env`**。
+> 所有 nxapi 相关开关（**f 参数生成方式**、**远程配置**、**自定义配置地址**）也都在下方的「**高级选项**」里配置，**无需编辑 `.env`**。
+
+> 凭据**只保存在服务器数据库**，由「用户设置」写入，**不从 `.env` 读取**，也不会进 Git / 部署包。
 
 ### 安全说明
 
-- **Client Secret 是敏感信息**，请只填在「用户设置」或 `server/.env`（两者都不会进 Git / 部署包）。
+- **Client Secret 是敏感信息**，只应填在「用户设置」（存入服务器数据库）。
 - **Client ID** 属于公开客户端标识，本身不是密钥。
 - 源码 `server/src/nintendo.js` 里的 `NA_CLIENT_ID = 71b963c1b7b6d119` 是**任天堂官方 NSO App 的公开 client_id**（社区公开常量），并非密钥，无需隐藏。
 - 你的任天堂 `session_token`、GitHub Token、Steam API Key 等全部保存在服务器数据库，不会对外暴露。

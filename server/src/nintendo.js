@@ -40,13 +40,6 @@ let activityCache = null
 let configPromise = null
 const CACHE_TTL = 2 * 60 * 1000
 
-// Values that came from the process environment (.env), used as a fallback when
-// the site settings don't provide them.
-const ORIGINAL_ENV = {
-  url: process.env.ZNCA_API_URL,
-  id: process.env.NXAPI_ZNCA_API_CLIENT_ID,
-  secret: process.env.NXAPI_ZNCA_API_CLIENT_SECRET,
-}
 let appliedEnvSignature = null
 
 function setEnvVar(name, value) {
@@ -56,21 +49,37 @@ function setEnvVar(name, value) {
 
 /**
  * Apply the nxapi znca-API configuration from the site settings
- * (用户设置 → 活动集成 → Nintendo). Settings take precedence over `.env`.
- * Changing it invalidates cached config / Coral tokens so it takes effect.
+ * (用户设置 → 活动集成 → Nintendo). Credentials are only read from the settings,
+ * never from `.env`. Changing them invalidates cached config / Coral tokens.
  */
 function applyNxapiEnv() {
   const nintendo = (getSetting('integrations', {}) || {}).nintendo || {}
   const url = String(nintendo.zncaApiUrl || '').trim()
   const id = String(nintendo.clientId || '').trim()
   const secret = String(nintendo.clientSecret || '').trim()
-  const signature = `${url}|${id}|${secret}`
+  const provider =
+    nintendo.provider === 'imink' || nintendo.provider === 'flapg' ? nintendo.provider : ''
+  const configUrl = String(nintendo.configUrl || '').trim()
+  const remoteConfig = nintendo.remoteConfig === true
+
+  const signature = `${url}|${id}|${secret}|${provider}|${configUrl}|${remoteConfig}`
   if (signature === appliedEnvSignature) return
   appliedEnvSignature = signature
 
-  setEnvVar('ZNCA_API_URL', url || ORIGINAL_ENV.url)
-  setEnvVar('NXAPI_ZNCA_API_CLIENT_ID', id || ORIGINAL_ENV.id)
-  setEnvVar('NXAPI_ZNCA_API_CLIENT_SECRET', secret || ORIGINAL_ENV.secret)
+  setEnvVar('ZNCA_API_URL', url)
+  setEnvVar('NXAPI_ZNCA_API_CLIENT_ID', id)
+  setEnvVar('NXAPI_ZNCA_API_CLIENT_SECRET', secret)
+  // explicit third-party provider (empty = auto: proxy if URL set, else imink)
+  setEnvVar('NXAPI_ZNCA_API', provider)
+
+  if (configUrl) {
+    // a custom nxapi config replaces the remote/bundled selection
+    setEnvVar('NXAPI_CONFIG_URL', configUrl)
+    delete process.env.NXAPI_ENABLE_REMOTE_CONFIG
+  } else {
+    delete process.env.NXAPI_CONFIG_URL
+    setEnvVar('NXAPI_ENABLE_REMOTE_CONFIG', remoteConfig ? '1' : '0')
+  }
 
   // the local nxapi config depends on the provider URL → rebuild it
   configPromise = null
