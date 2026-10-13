@@ -161,6 +161,7 @@ export function listPlugins() {
       pages: reg?.pages || [],
       postModules: reg?.postModules || [],
       editorTools: reg?.editorTools || [],
+      overlays: reg?.overlays || [],
       cardSources: reg ? Object.keys(reg.cardSources).map((s) => ({ id: s })) : [],
     }
   })

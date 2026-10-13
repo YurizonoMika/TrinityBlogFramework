@@ -1030,7 +1030,7 @@ const PERMISSION_LABELS: Record<string, string> = {
             </div>
 
             <div
-              v-if="p.loaded && (p.widgets.length || p.pages.length || p.postModules.length)"
+              v-if="p.loaded && (p.widgets.length || p.pages.length || p.postModules.length || p.overlays.length)"
               class="plugin-contrib"
             >
               <span class="mini-label">提供的内容</span>
@@ -1055,6 +1055,12 @@ const PERMISSION_LABELS: Record<string, string> = {
                 >
                   {{ pg.title }}
                 </router-link>
+              </div>
+              <div v-if="p.overlays.length" class="contrib-row">
+                <span class="contrib-label">叠加层</span>
+                <span v-for="o in p.overlays" :key="o.id" class="chip static">
+                  叠加层 · {{ o.id }}
+                </span>
               </div>
               <div v-if="p.postModules.length" class="contrib-row">
                 <span class="contrib-label">帖子模块</span>

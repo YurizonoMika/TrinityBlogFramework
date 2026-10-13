@@ -98,6 +98,7 @@ export interface InstalledPlugin {
   pages: PluginPage[]
   postModules: PluginPage[]
   editorTools: PluginEditorTool[]
+  overlays: PluginOverlay[]
   cardSources: { id: string }[]
 }
 export interface Card {
