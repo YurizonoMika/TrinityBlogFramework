@@ -69,16 +69,48 @@ function makeApi(pluginId: string) {
     storage: {
       url: assetUrl,
       list: () => api(`${base}/storage`),
-      upload: (files: File[]) => {
-        const form = new FormData()
-        for (const f of files) form.append('files', f)
-        return api(`${base}/storage`, { method: 'POST', body: form, raw: true })
-      },
+      upload: (files: File[], onProgress?: (ratio: number) => void) =>
+        sendFiles('POST', `${base}/storage`, 'files', files, onProgress),
+      replace: (name: string, file: File, onProgress?: (ratio: number) => void) =>
+        sendFiles('PUT', `${base}/storage/${encodeURIComponent(name)}`, 'file', [file], onProgress),
       remove: (name: string) => api(`${base}/storage/${encodeURIComponent(name)}`, { method: 'DELETE' }),
       removeBefore: (date: string) =>
         api(`${base}/storage?before=${encodeURIComponent(date)}`, { method: 'DELETE' }),
     },
   }
+}
+
+/** Multipart upload with progress via XHR (fetch can't report upload progress). */
+function sendFiles(
+  method: string,
+  path: string,
+  field: string,
+  files: File[],
+  onProgress?: (ratio: number) => void
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    for (const f of files) form.append(field, f)
+    const xhr = new XMLHttpRequest()
+    xhr.open(method, `/api${path}`)
+    const token = getToken()
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      let data: any = null
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch {
+        data = null
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+      else reject(new Error(data?.error || `请求失败 (${xhr.status})`))
+    }
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.send(form)
+  })
 }
 
 function interpolate(template: string, data: unknown): string {

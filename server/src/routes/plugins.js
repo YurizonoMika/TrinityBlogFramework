@@ -113,6 +113,17 @@ router.get('/:id/storage/:file', (req, res) => {
   res.sendFile(p)
 })
 
+// overwrite an existing file (same name)
+router.put('/:id/storage/:file', requireAuth, storageUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '没有收到文件' })
+  try {
+    savePluginStorageFile(req.params.id, req.params.file, req.file.buffer)
+    res.json({ ok: true, all: listPluginStorage(req.params.id), stats: pluginStorageStats(req.params.id) })
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) })
+  }
+})
+
 router.delete('/:id/storage/:file', requireAuth, (req, res) => {
   deletePluginStorageFile(req.params.id, req.params.file)
   res.json({ ok: true, all: listPluginStorage(req.params.id), stats: pluginStorageStats(req.params.id) })
