@@ -9,12 +9,23 @@ marked.setOptions({
   breaks: true,
 })
 
+/** Escape user-supplied attribute values before they reach the HTML string. */
+function attr(value: string): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/'/g, '&#39;')
+}
+
 const renderer = new marked.Renderer()
 
 renderer.image = ({ href, title, text }) => {
-  const t = title ? ` title="${title}"` : ''
-  return `<figure class="md-figure"><img src="${href}" alt="${text || ''}"${t} loading="lazy" />${
-    text ? `<figcaption>${text}</figcaption>` : ''
+  const safeHref = attr(href)
+  const t = title ? ` title="${attr(title)}"` : ''
+  return `<figure class="md-figure"><img src="${safeHref}" alt="${attr(text || '')}"${t} loading="lazy" />${
+    text ? `<figcaption>${attr(text)}</figcaption>` : ''
   }</figure>`
 }
 

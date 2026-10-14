@@ -3,7 +3,7 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { api, getToken } from '@/lib/api'
+import { api } from '@/lib/api'
 import { auth } from '@/stores/auth'
 import { alertDialog, confirmDialog } from '@/stores/dialog'
 import type { RuntimePlugin } from '@/lib/types'
@@ -108,10 +108,8 @@ function makeApi(pluginId: string, owner: string) {
     const s = params.toString()
     return s ? `?${s}` : ''
   }
-  const assetUrl = (name: string) => {
-    const token = getToken()
-    return `/api/plugins/${pluginId}/storage/${encodeURIComponent(name)}${q(token ? { token } : undefined)}`
-  }
+  const assetUrl = (name: string) =>
+    `/api/plugins/${pluginId}/storage/${encodeURIComponent(name)}${q()}`
   return {
     pluginId,
     owner,
@@ -154,8 +152,7 @@ function sendFiles(
     for (const f of files) form.append(field, f)
     const xhr = new XMLHttpRequest()
     xhr.open(method, `/api${path}`)
-    const token = getToken()
-    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest')
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
     }
@@ -187,7 +184,14 @@ function interpolate(template: string, data: unknown): string {
 }
 
 function stripScripts(html: string): string {
-  return html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/ on\w+="[^"]*"/gi, '')
+  let out = String(html || '')
+  out = out.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '').replace(/<script\b[^>]*\/?>/gi, '')
+  out = out.replace(/\s+on[a-zA-Z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/g, '')
+  out = out.replace(
+    /(\s(?:href|src|action|formaction|xlink:href)\s*=\s*)(["'])\s*javascript:[^"']*\2/gi,
+    '$1$2#$2'
+  )
+  return out
 }
 
 async function load() {

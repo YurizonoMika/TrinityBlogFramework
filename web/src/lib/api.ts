@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
-const TOKEN_KEY = 'homepage.token'
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-export function setToken(token: string | null) {
-  if (token) localStorage.setItem(TOKEN_KEY, token)
-  else localStorage.removeItem(TOKEN_KEY)
-}
+// Session is carried by an HttpOnly cookie — never readable by JS.
 
 export class ApiError extends Error {
   status: number
@@ -27,9 +19,7 @@ type Options = {
 }
 
 export async function api<T = any>(path: string, options: Options = {}): Promise<T> {
-  const headers: Record<string, string> = {}
-  const token = getToken()
-  if (token && options.auth !== false) headers.Authorization = `Bearer ${token}`
+  const headers: Record<string, string> = { 'X-Requested-With': 'XMLHttpRequest' }
   let body: BodyInit | undefined
   if (options.body !== undefined) {
     if (options.raw) {
@@ -43,6 +33,7 @@ export async function api<T = any>(path: string, options: Options = {}): Promise
     method: options.method || (body ? 'POST' : 'GET'),
     headers,
     body,
+    credentials: 'same-origin',
   })
   const text = await res.text()
   let data: any = null

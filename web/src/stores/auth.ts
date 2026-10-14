@@ -2,7 +2,7 @@
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
 import { reactive } from 'vue'
-import { api, getToken, setToken } from '@/lib/api'
+import { api } from '@/lib/api'
 import type { User } from '@/lib/types'
 
 interface AuthState {
@@ -18,6 +18,11 @@ export const auth = reactive<AuthState>({
 })
 
 let bootstrapPromise: Promise<void> | null = null
+
+/** The server sets a non-sensitive flag cookie when a session exists. */
+function hasSessionCookie(): boolean {
+  return document.cookie.split(';').some((c) => c.trim().startsWith('hp_logged_in='))
+}
 
 export function isLoggedIn(): boolean {
   return Boolean(auth.user)
@@ -38,17 +43,16 @@ export async function bootstrap(): Promise<void> {
   if (bootstrapPromise) return bootstrapPromise
   bootstrapPromise = (async () => {
     try {
-      const status = await api<{ setupComplete: boolean }>('/setup/status', { auth: false })
+      const status = await api<{ setupComplete: boolean }>('/setup/status')
       auth.setupComplete = status.setupComplete
     } catch {
       auth.setupComplete = false
     }
-    if (getToken()) {
+    if (hasSessionCookie()) {
       try {
         const { user } = await api<{ user: User }>('/auth/me')
         auth.user = user
       } catch {
-        setToken(null)
         auth.user = null
       }
     }
@@ -67,28 +71,20 @@ export async function createSetupAccount(payload: {
   password: string
   displayName: string
 }) {
-  const { token, user } = await api<{ token: string; user: User }>('/setup', {
-    body: payload,
-    auth: false,
-  })
-  setToken(token)
+  const { user } = await api<{ user: User }>('/setup', { body: payload })
   auth.user = user
   auth.setupComplete = true
   return user
 }
 
 export async function login(username: string, password: string) {
-  const { token, user } = await api<{ token: string; user: User }>('/auth/login', {
-    body: { username, password },
-    auth: false,
-  })
-  setToken(token)
+  const { user } = await api<{ user: User }>('/auth/login', { body: { username, password } })
   auth.user = user
   return user
 }
 
 export function logout() {
-  setToken(null)
+  api('/auth/logout', { method: 'POST' }).catch(() => {})
   auth.user = null
 }
 

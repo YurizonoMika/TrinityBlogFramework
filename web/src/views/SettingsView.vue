@@ -7,7 +7,7 @@ import { useRoute } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import ImageCropper from '@/components/ImageCropper.vue'
 import BaseDialog from '@/components/BaseDialog.vue'
-import { api, getToken, uploadFile } from '@/lib/api'
+import { api, uploadFile } from '@/lib/api'
 import { auth, setUser } from '@/stores/auth'
 import {
   loadFullSettings,
@@ -48,6 +48,12 @@ function progressFinish() {
 }
 const installedPlugins = ref<InstalledPlugin[]>([])
 const pluginBusy = ref(false)
+// admins may manage another user's plugins via ?username=
+const pluginOwner = ref('')
+const pluginUsers = ref<{ id: number; username: string; display_name: string }[]>([])
+function pluginQuery() {
+  return pluginOwner.value ? `?username=${encodeURIComponent(pluginOwner.value)}` : ''
+}
 
 const profile = reactive({ display_name: '', email: '', avatar: '', bio: '' })
 const homeBanner = reactive({ banner: '', subtitle: '', description: '' })
@@ -129,7 +135,17 @@ const ALL_TABS = [
   { id: 'storage', label: '存储空间', icon: 'storage', adminOnly: false },
   { id: 'backup', label: '备份与迁移', icon: 'save', adminOnly: true },
 ] as const
-const TABS = computed(() => ALL_TABS.filter((t) => isAdminUser.value || !t.adminOnly))
+const canManagePlugins = computed(() => isAdminUser.value || Boolean(auth.user?.permissions?.plugins))
+const TABS = computed(() =>
+  ALL_TABS.filter((t) => {
+    if (t.id === 'plugins') return canManagePlugins.value
+    return isAdminUser.value || !t.adminOnly
+  })
+)
+// if the active tab isn't available to this user, fall back to the first one
+watch(TABS, (tabs) => {
+  if (!tabs.some((t) => t.id === tab.value)) tab.value = (tabs[0]?.id as any) || 'profile'
+})
 
 async function load() {
   const data = await loadFullSettings()
@@ -175,6 +191,7 @@ onMounted(() => {
   load()
   loadNintendoStatus()
   loadInstalledPlugins()
+  loadPluginUsers()
 })
 
 async function loadNintendoStatus() {
@@ -837,8 +854,6 @@ function exportBackup() {
   return new Promise<void>((resolve) => {
     const xhr = new XMLHttpRequest()
     xhr.open('GET', '/api/backup/export')
-    const token = getToken()
-    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
     xhr.responseType = 'blob'
     progressShow(0)
     xhr.onprogress = (e) => {
@@ -896,8 +911,7 @@ async function onImportFile(e: Event) {
   await new Promise<void>((resolve) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api/backup/import')
-    const token = getToken()
-    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest')
     // upload progress (determinate), then server processing (indeterminate)
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable) progressShow(ev.loaded / ev.total)
@@ -932,9 +946,20 @@ async function onImportFile(e: Event) {
 }
 
 async function loadInstalledPlugins() {
+  if (!canManagePlugins.value) return
   try {
-    const res = await api<{ plugins: InstalledPlugin[] }>('/plugins/manage')
+    const res = await api<{ plugins: InstalledPlugin[] }>(`/plugins/manage${pluginQuery()}`)
     installedPlugins.value = res.plugins
+  } catch {
+    /* ignore */
+  }
+}
+
+async function loadPluginUsers() {
+  if (!isAdminUser.value) return
+  try {
+    const res = await api<{ users: { id: number; username: string; display_name: string }[] }>('/users')
+    pluginUsers.value = res.users
   } catch {
     /* ignore */
   }
@@ -949,7 +974,7 @@ async function onImportPlugin(e: Event) {
   try {
     const form = new FormData()
     form.append('file', file)
-    await api('/plugins/import', { method: 'POST', body: form, raw: true })
+    await api(`/plugins/import${pluginQuery()}`, { method: 'POST', body: form, raw: true })
     await loadInstalledPlugins()
     await loadPlugins()
     notify('插件已导入，请在下方启用', 'success')
@@ -963,7 +988,7 @@ async function onImportPlugin(e: Event) {
 async function updatePlugin(p: InstalledPlugin, patch: Record<string, unknown>) {
   pluginBusy.value = true
   try {
-    const res = await api<{ plugin: InstalledPlugin }>(`/plugins/${p.id}`, {
+    const res = await api<{ plugin: InstalledPlugin }>(`/plugins/${p.id}${pluginQuery()}`, {
       method: 'PUT',
       body: patch,
     })
@@ -991,7 +1016,7 @@ function togglePermission(p: InstalledPlugin, perm: string) {
 async function removePlugin(p: InstalledPlugin) {
   if (!(await confirmDialog({ title: '删除插件', message: `确定删除插件「${p.name}」吗？`, confirmText: '删除', danger: true }))) return
   try {
-    await api(`/plugins/${p.id}`, { method: 'DELETE' })
+    await api(`/plugins/${p.id}${pluginQuery()}`, { method: 'DELETE' })
     installedPlugins.value = installedPlugins.value.filter((x) => x.id !== p.id)
     await loadPlugins()
     notify('插件已删除', 'success')
@@ -1501,10 +1526,21 @@ const PERMISSION_LABELS: Record<string, string> = {
         <section v-show="tab === 'plugins'" class="card">
           <h2 class="panel-title">拓展程序</h2>
           <p class="md-muted panel-hint">
-            导入 ZIP 插件包
+            <template v-if="isAdminUser">导入 ZIP 插件包。启用/对访客公开代表执行插件代码，仅管理员可操作。</template>
+            <template v-else>插件由管理员安装与启用；你可以查看已安装的插件与配置其权限。</template>
           </p>
 
-          <div class="plugin-import">
+          <label v-if="isAdminUser" class="field filled" style="margin-bottom: 16px">
+            <select v-model="pluginOwner" class="field-input" @change="loadInstalledPlugins">
+              <option value="">我自己（{{ auth.user?.username }}）</option>
+              <option v-for="u in pluginUsers" :key="u.username" :value="u.username">
+                {{ u.display_name || u.username }}（@{{ u.username }}）
+              </option>
+            </select>
+            <span class="field-label">管理对象</span>
+          </label>
+
+          <div v-if="isAdminUser" class="plugin-import">
             <label class="btn btn-filled">
               <span v-if="pluginBusy" class="spinner" style="width: 15px; height: 15px" />
               <AppIcon v-else name="upload" :size="17" />导入插件包（.zip）
@@ -1531,19 +1567,29 @@ const PERMISSION_LABELS: Record<string, string> = {
                 </p>
                 <p v-if="p.error" class="plugin-error">{{ p.error }}</p>
               </div>
-              <button class="icon-btn danger" title="删除" @click="removePlugin(p)">
+              <button v-if="isAdminUser || !pluginOwner" class="icon-btn danger" title="删除" @click="removePlugin(p)">
                 <AppIcon name="delete" :size="18" />
               </button>
             </div>
 
             <div class="plugin-toggles">
-              <label class="switch">
-                <input type="checkbox" :checked="p.enabled" @change="updatePlugin(p, { enabled: !p.enabled })" />
+              <label class="switch" :title="isAdminUser ? '' : '仅管理员可启用插件'">
+                <input
+                  type="checkbox"
+                  :checked="p.enabled"
+                  :disabled="!isAdminUser"
+                  @change="updatePlugin(p, { enabled: !p.enabled })"
+                />
                 <span class="switch-track"><span class="switch-thumb" /></span>
                 <span>启用</span>
               </label>
-              <label class="switch">
-                <input type="checkbox" :checked="p.visitor" @change="updatePlugin(p, { visitor: !p.visitor })" />
+              <label class="switch" :title="isAdminUser ? '' : '仅管理员可对访客公开'">
+                <input
+                  type="checkbox"
+                  :checked="p.visitor"
+                  :disabled="!isAdminUser"
+                  @change="updatePlugin(p, { visitor: !p.visitor })"
+                />
                 <span class="switch-track"><span class="switch-thumb" /></span>
                 <span>对访客开放</span>
               </label>
