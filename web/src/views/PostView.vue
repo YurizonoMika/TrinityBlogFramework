@@ -11,7 +11,6 @@ import { api } from '@/lib/api'
 import { renderMarkdown } from '@/lib/markdown'
 import { formatDate, readingTime } from '@/lib/format'
 import { auth } from '@/stores/auth'
-import { site } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import { useParallax } from '@/lib/useParallax'
 import type { Post } from '@/lib/types'
@@ -54,7 +53,9 @@ const segments = computed(() => {
   }
   return out
 })
-const authorInitial = computed(() => (site.profile?.display_name || 'A').trim().charAt(0).toUpperCase())
+const authorInitial = computed(() =>
+  (post.value?.author_name || post.value?.author_username || 'A').trim().charAt(0).toUpperCase()
+)
 
 const coverRef = ref<HTMLElement | null>(null)
 const { update: updateParallax } = useParallax(coverRef, 0.3, 140)
@@ -142,9 +143,12 @@ async function doDelete() {
           </div>
           <h1 class="md-display post-title">{{ post.title }}</h1>
           <div class="author-row">
-            <img v-if="site.profile?.avatar" class="avatar sm" :src="site.profile.avatar" alt="" />
+            <img v-if="post.author_avatar" class="avatar sm" :src="post.author_avatar" alt="" />
             <span v-else class="avatar sm">{{ authorInitial }}</span>
-            <span>{{ site.profile?.display_name || site.profile?.username }}</span>
+            <router-link v-if="post.author_username" :to="`/user/${post.author_username}`">
+              {{ post.author_name || post.author_username }}
+            </router-link>
+            <span v-else>{{ post.author_name || '匿名' }}</span>
           </div>
 
           <div v-if="auth.user" class="post-controls">

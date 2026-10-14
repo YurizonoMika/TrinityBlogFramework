@@ -6,10 +6,11 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import PluginView from './PluginView.vue'
-import { auth, logout } from '@/stores/auth'
+import { auth, logout, can } from '@/stores/auth'
 import { site, toggleTheme } from '@/stores/site'
 import { openPalette } from '@/stores/palette'
 import { plugins } from '@/lib/plugins'
+import { usePageOwner } from '@/lib/scope'
 
 const route = useRoute()
 const router = useRouter()
@@ -38,14 +39,27 @@ const pluginPages = computed(() =>
     (p.pages || []).map((pg) => ({ path: `/p/${p.id}/${pg.id}`, title: pg.title, icon: pg.icon || 'extension' }))
   )
 )
-const navItems = computed(() => [
-  { path: '/', title: '首页', icon: 'home' },
-  { path: '/blog', title: '博客', icon: 'article' },
-  { path: '/moments', title: '动态', icon: 'chat' },
-  ...pluginPages.value,
-])
+// the user the current page is scoped to (params / query / account pages).
+// The brand always links to the whole-site home.
+const routeUsername = usePageOwner()
+const navItems = computed(() => {
+  const u = routeUsername.value
+  const query = u ? { username: u } : {}
+  const home = u ? `/user/${encodeURIComponent(u)}` : '/'
+  return [
+    { path: home, to: home, title: '首页', icon: 'home' },
+    { path: '/blog', to: { path: '/blog', query }, title: '博客', icon: 'article' },
+    { path: '/moments', to: { path: '/moments', query }, title: '动态', icon: 'chat' },
+    ...pluginPages.value.map((p) => ({
+      path: p.path,
+      to: { path: p.path, query },
+      title: p.title,
+      icon: p.icon,
+    })),
+  ]
+})
 const initial = computed(() => {
-  const name = site.profile?.display_name || auth.user?.display_name || 'A'
+  const name = auth.user?.display_name || auth.user?.username || 'A'
   return name.trim().charAt(0).toUpperCase()
 })
 
@@ -116,7 +130,7 @@ onUnmounted(() => {
         <router-link
           v-for="item in navItems"
           :key="item.path"
-          :to="item.path"
+          :to="item.to"
           :class="{ active: isActive(item.path) }"
         >
           <AppIcon :name="item.icon" :size="18" /><span>{{ item.title }}</span>
@@ -153,21 +167,24 @@ onUnmounted(() => {
           <AppIcon :name="site.theme === 'dark' ? 'light_mode' : 'dark_mode'" :size="20" />
         </button>
 
-        <router-link v-if="auth.user" to="/write" class="btn btn-tonal btn-sm write-btn">
+        <router-link v-if="auth.user && can('post')" to="/write" class="btn btn-tonal btn-sm write-btn">
           <AppIcon name="edit" :size="16" /><span>写文章</span>
         </router-link>
 
         <div v-if="auth.user" ref="accountRef" class="account">
           <button class="avatar-trigger" @click.stop="accountOpen = !accountOpen">
-            <img v-if="site.profile?.avatar || auth.user.avatar" :src="site.profile?.avatar || auth.user.avatar" alt="" class="avatar sm" />
+            <img v-if="auth.user.avatar" :src="auth.user.avatar" alt="" class="avatar sm" />
             <span v-else class="avatar sm">{{ initial }}</span>
           </button>
           <div v-if="accountOpen" class="menu account-menu">
             <div class="account-head">
-              <strong>{{ site.profile?.display_name || auth.user.display_name }}</strong>
+              <strong>{{ auth.user.display_name || auth.user.username }}</strong>
               <span class="md-muted">@{{ auth.user.username }}</span>
             </div>
             <div class="menu-divider" />
+            <router-link class="menu-item" :to="`/user/${auth.user.username}`" @click="accountOpen = false">
+              <AppIcon name="person" :size="18" />我的主页
+            </router-link>
             <router-link class="menu-item" to="/settings" @click="accountOpen = false">
               <AppIcon name="settings" :size="18" />用户设置
             </router-link>
@@ -192,7 +209,7 @@ onUnmounted(() => {
         <router-link
           v-for="item in navItems"
           :key="item.path"
-          :to="item.path"
+          :to="item.to"
           :class="{ active: isActive(item.path) }"
           @click="mobileOpen = false"
         >
@@ -201,7 +218,7 @@ onUnmounted(() => {
         <router-link v-if="auth.user" to="/settings" @click="mobileOpen = false">
           <AppIcon name="settings" :size="18" />用户设置
         </router-link>
-        <router-link v-if="auth.user" to="/write" @click="mobileOpen = false">
+        <router-link v-if="auth.user && can('post')" to="/write" @click="mobileOpen = false">
           <AppIcon name="edit" :size="18" />写文章
         </router-link>
       </div>

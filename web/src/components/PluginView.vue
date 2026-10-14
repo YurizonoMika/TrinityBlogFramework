@@ -100,15 +100,21 @@ function unwrap(r: any) {
   return r && typeof r === 'object' && 'data' in r ? r.data : r
 }
 
-function makeApi(pluginId: string) {
+function makeApi(pluginId: string, owner: string) {
   const base = `/plugins/${pluginId}`
+  const q = (extra?: Record<string, string>) => {
+    const params = new URLSearchParams(extra || {})
+    if (owner) params.set('username', owner)
+    const s = params.toString()
+    return s ? `?${s}` : ''
+  }
   const assetUrl = (name: string) => {
     const token = getToken()
-    const qs = token ? `?token=${encodeURIComponent(token)}` : ''
-    return `/api/plugins/${pluginId}/storage/${encodeURIComponent(name)}${qs}`
+    return `/api/plugins/${pluginId}/storage/${encodeURIComponent(name)}${q(token ? { token } : undefined)}`
   }
   return {
     pluginId,
+    owner,
     get isAdmin() {
       return Boolean(auth.user)
     },
@@ -117,23 +123,20 @@ function makeApi(pluginId: string) {
       alert: (opts: any) => alertDialog(opts),
     },
     call(route: string, opts: { method?: string; body?: unknown; query?: Record<string, string> } = {}) {
-      const qs = opts.query ? `?${new URLSearchParams(opts.query)}` : ''
-      return api(`${base}/call/${route}${qs}`, { method: opts.method || 'GET', body: opts.body }).then(unwrap)
+      return api(`${base}/call/${route}${q(opts.query)}`, { method: opts.method || 'GET', body: opts.body }).then(unwrap)
     },
     data(source: string, query?: Record<string, string>) {
-      const qs = query ? `?${new URLSearchParams(query)}` : ''
-      return api(`${base}/data/${source}${qs}`, { auth: false }).then(unwrap)
+      return api(`${base}/data/${source}${q(query)}`, { auth: false }).then(unwrap)
     },
     storage: {
       url: assetUrl,
-      list: () => api(`${base}/storage`),
+      list: () => api(`${base}/storage${q()}`),
       upload: (files: File[], onProgress?: (ratio: number) => void) =>
-        sendFiles('POST', `${base}/storage`, 'files', files, onProgress),
+        sendFiles('POST', `${base}/storage${q()}`, 'files', files, onProgress),
       replace: (name: string, file: File, onProgress?: (ratio: number) => void) =>
-        sendFiles('PUT', `${base}/storage/${encodeURIComponent(name)}`, 'file', [file], onProgress),
-      remove: (name: string) => api(`${base}/storage/${encodeURIComponent(name)}`, { method: 'DELETE' }),
-      removeBefore: (date: string) =>
-        api(`${base}/storage?before=${encodeURIComponent(date)}`, { method: 'DELETE' }),
+        sendFiles('PUT', `${base}/storage/${encodeURIComponent(name)}${q()}`, 'file', [file], onProgress),
+      remove: (name: string) => api(`${base}/storage/${encodeURIComponent(name)}${q()}`, { method: 'DELETE' }),
+      removeBefore: (date: string) => api(`${base}/storage${q({ before: date })}`, { method: 'DELETE' }),
     },
   }
 }
@@ -192,17 +195,23 @@ async function load() {
   error.value = ''
   cleanup?.()
   cleanup = undefined
+  const owner = props.plugin.owner || ''
+  const ownerQs = owner ? `&username=${encodeURIComponent(owner)}` : ''
   try {
     let data: any = props.data ?? null
     const source = props.source || props.plugin.cardSources[0]?.id
     if (data == null && source) {
-      const res = await api<{ data: unknown }>(`/plugins/${props.plugin.id}/data/${source}`)
+      const res = await api<{ data: unknown }>(
+        `/plugins/${props.plugin.id}/data/${source}${owner ? `?username=${encodeURIComponent(owner)}` : ''}`
+      )
       data = res.data
     }
     resolvedData.value = data
 
     const template = props.plugin.hasUi
-      ? await api<string>(`/plugins/${props.plugin.id}/ui?rev=${encodeURIComponent(props.plugin.rev)}`)
+      ? await api<string>(
+          `/plugins/${props.plugin.id}/ui?rev=${encodeURIComponent(props.plugin.rev)}${ownerQs}`
+        )
       : ''
 
     loading.value = false
@@ -217,7 +226,7 @@ async function load() {
         if (props.plugin.hasJs) {
           try {
             const mod = await import(
-              /* @vite-ignore */ `/plugins/${props.plugin.id}/ui.js?v=${encodeURIComponent(props.plugin.rev)}`
+              /* @vite-ignore */ `/api/plugins/${props.plugin.id}/asset/ui.js?rev=${encodeURIComponent(props.plugin.rev)}${ownerQs}`
             )
             if (typeof mod?.mount === 'function') {
               cleanup = mod.mount({
@@ -226,7 +235,8 @@ async function load() {
                 id: props.id || '',
                 root,
                 host,
-                api: makeApi(props.plugin.id),
+                owner,
+                api: makeApi(props.plugin.id, owner),
               })
             }
           } catch (e) {

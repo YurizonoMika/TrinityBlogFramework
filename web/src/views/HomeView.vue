@@ -2,7 +2,8 @@
 <!-- Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika) -->
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import BaseDialog from '@/components/BaseDialog.vue'
 import WelcomeBanner from '@/components/WelcomeBanner.vue'
@@ -16,13 +17,58 @@ import PluginView from '@/components/PluginView.vue'
 import { api } from '@/lib/api'
 import { useDragSort } from '@/lib/useDragSort'
 import { auth } from '@/stores/auth'
+import { site } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import { plugins, findPlugin } from '@/lib/plugins'
-import type { Card, CardType, LinkItem, Post, RuntimePlugin } from '@/lib/types'
+import type {
+  Card,
+  CardType,
+  HomepageSettings,
+  LinkItem,
+  Post,
+  PublicProfile,
+  RuntimePlugin,
+} from '@/lib/types'
 
+const route = useRoute()
+const routeUsername = computed(() => (route.params.username as string) || '')
 const cards = ref<Card[]>([])
 const posts = ref<Post[]>([])
 const loading = ref(true)
+const targetProfile = ref<PublicProfile | null>(null)
+const targetHomepage = ref<HomepageSettings | null>(null)
+const targetId = ref<number | null>(null)
+const canEdit = computed(() =>
+  Boolean(auth.user && (auth.user.role === 'admin' || auth.user.username === routeUsername.value))
+)
+
+/** query string for card reads / mutations (admin may target another user) */
+function cardsQuery(forMutation = false) {
+  if (forMutation) {
+    if (auth.user?.role === 'admin' && targetId.value && targetId.value !== auth.user.id) {
+      return `?userId=${targetId.value}`
+    }
+    return ''
+  }
+  return routeUsername.value ? `?username=${encodeURIComponent(routeUsername.value)}` : ''
+}
+
+function loadProfile() {
+  const qs = routeUsername.value ? `?username=${encodeURIComponent(routeUsername.value)}` : ''
+  return api<{ profile: PublicProfile | null; homepage: HomepageSettings | null }>(
+    `/settings/public${qs}`,
+    { auth: false }
+  )
+    .then((d) => {
+      targetProfile.value = d.profile
+      targetHomepage.value = d.homepage
+      targetId.value = d.profile?.id ?? null
+    })
+    .catch(() => {
+      targetProfile.value = routeUsername.value ? null : site.profile
+      targetHomepage.value = null
+    })
+}
 
 const editMode = ref(false)
 const editDialog = ref(false)
@@ -96,7 +142,7 @@ const { dragId, overId, dragstart, dragover, drop, reset } = useDragSort(
     const map = new Map(cards.value.map((c) => [c.id, c]))
     cards.value = order.map((id) => map.get(id)!).filter(Boolean)
     try {
-      const res = await api<{ cards: Card[] }>('/cards/reorder', { method: 'PUT', body: { order } })
+      const res = await api<{ cards: Card[] }>(`/cards/reorder${cardsQuery(true)}`, { method: 'PUT', body: { order } })
       cards.value = res.cards
     } catch {
       notify('排序保存失败', 'error')
@@ -106,7 +152,7 @@ const { dragId, overId, dragstart, dragover, drop, reset } = useDragSort(
 
 async function loadCards() {
   try {
-    const res = await api<{ cards: Card[] }>('/cards', { auth: false })
+    const res = await api<{ cards: Card[] }>(`/cards${cardsQuery()}`, { auth: false })
     cards.value = res.cards
   } catch {
     notify('卡片加载失败', 'error')
@@ -115,16 +161,28 @@ async function loadCards() {
 
 async function loadPosts() {
   try {
-    const all = auth.user ? '&all=1' : ''
-    const res = await api<{ posts: Post[] }>(`/posts?limit=6${all}`, { auth: false })
+    const target = routeUsername.value ? `&username=${encodeURIComponent(routeUsername.value)}` : ''
+    const all = canEdit.value ? '&all=1' : ''
+    const res = await api<{ posts: Post[] }>(`/posts?limit=6${all}${target}`, { auth: false })
     posts.value = res.posts
   } catch {
     /* ignore */
   }
 }
 
+async function loadAll() {
+  await Promise.all([loadProfile(), loadCards(), loadPosts()])
+}
+
 onMounted(async () => {
-  await Promise.all([loadCards(), loadPosts()])
+  await loadAll()
+  loading.value = false
+})
+
+watch(routeUsername, async () => {
+  loading.value = true
+  editMode.value = false
+  await loadAll()
   loading.value = false
 })
 
@@ -167,7 +225,7 @@ async function saveEdit() {
 
 async function toggleVisible(card: Card) {
   try {
-    const res = await api<{ card: Card }>(`/cards/${card.id}`, {
+    const res = await api<{ card: Card }>(`/cards/${card.id}${cardsQuery(true)}`, {
       method: 'PUT',
       body: { visible: !card.visible },
     })
@@ -182,7 +240,7 @@ async function doDelete() {
   if (!confirmCard.value) return
   const card = confirmCard.value
   try {
-    await api(`/cards/${card.id}`, { method: 'DELETE' })
+    await api(`/cards/${card.id}${cardsQuery(true)}`, { method: 'DELETE' })
     cards.value = cards.value.filter((c) => c.id !== card.id)
     confirmCard.value = null
     notify('卡片已删除', 'success')
@@ -193,7 +251,7 @@ async function doDelete() {
 
 async function addCard() {
   try {
-    const res = await api<{ card: Card }>('/cards', {
+    const res = await api<{ card: Card }>(`/cards${cardsQuery(true)}`, {
       method: 'POST',
       body: { type: newCard.type, title: newCard.title, width: newCard.width },
     })
@@ -229,7 +287,7 @@ function toggleProvider(p: string) {
 
 <template>
   <div class="home">
-    <WelcomeBanner />
+    <WelcomeBanner :profile="targetProfile" :homepage="targetHomepage" :username="routeUsername" />
 
     <div class="md-container home-body">
       <div class="section-bar">
@@ -237,7 +295,7 @@ function toggleProvider(p: string) {
           <span class="md-label">HOME</span>
           <h2 class="md-headline">个人概览</h2>
         </div>
-        <div v-if="auth.user" class="layout-tools">
+        <div v-if="canEdit" class="layout-tools">
           <button
             class="btn btn-sm"
             :class="editMode ? 'btn-filled' : 'btn-outlined'"
@@ -272,8 +330,8 @@ function toggleProvider(p: string) {
           @remove="confirmCard = card"
           @toggle="toggleVisible(card)"
         >
-          <ProfileCard v-if="card.type === 'profile'" />
-          <ActivityCard v-else-if="card.type === 'activity'" :card="card" />
+          <ProfileCard v-if="card.type === 'profile'" :profile="targetProfile" />
+          <ActivityCard v-else-if="card.type === 'activity'" :card="card" :username="routeUsername" />
           <LatestPostsCard
             v-else-if="card.type === 'posts'"
             :posts="posts"
@@ -314,7 +372,7 @@ function toggleProvider(p: string) {
       <div v-if="!loading && !visibleCards.length" class="empty-state">
         <AppIcon name="widgets" :size="32" />
         <p>首页还没有任何卡片</p>
-        <button v-if="auth.user" class="btn btn-tonal btn-sm" @click="editMode = true; addDialog = true">
+        <button v-if="canEdit" class="btn btn-tonal btn-sm" @click="editMode = true; addDialog = true">
           <AppIcon name="add" :size="16" />添加卡片
         </button>
       </div>

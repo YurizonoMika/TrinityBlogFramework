@@ -11,20 +11,23 @@ import CreditsDialog from './components/CreditsDialog.vue'
 import PluginOverlay from './components/PluginOverlay.vue'
 import DialogHost from './components/DialogHost.vue'
 import AppIcon from './components/AppIcon.vue'
-import { auth } from '@/stores/auth'
+import { auth, can } from '@/stores/auth'
 import { loadPublicSite, applyTheme, site } from '@/stores/site'
 import { loadPlugins } from '@/lib/plugins'
+import { usePageOwner } from '@/lib/scope'
 
 const route = useRoute()
 const creditsOpen = ref(false)
 const showChrome = computed(() => route.name !== 'setup' && route.name !== 'login')
 const showFab = computed(
-  () => auth.user && (route.name === 'home' || route.name === 'blog')
+  () => auth.user && can('post') && (route.name === 'home' || route.name === 'blog' || route.name === 'user-home')
 )
+// the user whose content/plugins the current page is scoped to ('' = site owner)
+const scopeOwner = usePageOwner()
 
 onMounted(async () => {
   applyTheme()
-  loadPlugins()
+  loadPlugins(scopeOwner.value)
   try {
     await loadPublicSite()
   } catch {
@@ -36,9 +39,11 @@ watch(
   () => auth.user,
   () => {
     loadPublicSite().catch(() => {})
-    loadPlugins()
+    loadPlugins(scopeOwner.value)
   }
 )
+
+watch(scopeOwner, (u) => loadPlugins(u))
 
 watch(
   () => site.site.accent,

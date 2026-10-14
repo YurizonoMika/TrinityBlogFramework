@@ -9,7 +9,7 @@ import BaseDialog from '@/components/BaseDialog.vue'
 import ImageLightbox from '@/components/ImageLightbox.vue'
 import { api, uploadFile } from '@/lib/api'
 import { formatRelative } from '@/lib/format'
-import { auth } from '@/stores/auth'
+import { auth, can } from '@/stores/auth'
 import { notify } from '@/stores/toast'
 import type { Moment } from '@/lib/types'
 
@@ -17,8 +17,12 @@ const MAX_LEN = 200
 const MAX_IMAGES = 4
 
 const route = useRoute()
+const routeUsername = computed(() => (route.query.username as string) || '')
 const moments = ref<Moment[]>([])
 const loading = ref(true)
+const canCompose = computed(
+  () => can('moment') && (!routeUsername.value || auth.user?.username === routeUsername.value)
+)
 
 const composer = reactive({
   open: false,
@@ -37,7 +41,8 @@ const remaining = computed(() => MAX_LEN - composer.content.length)
 async function load() {
   loading.value = true
   try {
-    const res = await api<{ moments: Moment[] }>('/moments?limit=200', { auth: false })
+    const scope = routeUsername.value ? `&username=${encodeURIComponent(routeUsername.value)}` : ''
+    const res = await api<{ moments: Moment[] }>(`/moments?limit=200${scope}`, { auth: false })
     moments.value = res.moments
   } catch {
     notify('动态加载失败', 'error')
@@ -51,6 +56,8 @@ onMounted(async () => {
   await nextTick()
   flashFromQuery()
 })
+
+watch(routeUsername, load)
 
 watch(
   () => route.query.m,
@@ -151,10 +158,10 @@ function openLightbox(images: string[], index: number) {
     <header class="moments-head">
       <div>
         <span class="md-label">MOMENTS</span>
-        <h1 class="md-headline">动态</h1>
+        <h1 class="md-headline">{{ routeUsername ? `@${routeUsername} 的动态` : '动态' }}</h1>
         <p class="md-muted">记录当下 · 共 {{ moments.length }} 条</p>
       </div>
-      <button v-if="auth.user" class="btn btn-filled" @click="openComposer()">
+      <button v-if="canCompose" class="btn btn-filled" @click="openComposer()">
         <AppIcon name="add" :size="18" />发布动态
       </button>
     </header>
@@ -180,7 +187,7 @@ function openLightbox(images: string[], index: number) {
 
         <footer class="moment-foot">
           <time class="md-muted">{{ formatRelative(m.created_at) }}</time>
-          <div v-if="auth.user" class="moment-admin">
+          <div v-if="auth.user && (auth.user.role === 'admin' || m.author_id === auth.user.id)" class="moment-admin">
             <button class="icon-btn sm" title="编辑" @click="openComposer(m)">
               <AppIcon name="edit" :size="16" />
             </button>
@@ -195,7 +202,7 @@ function openLightbox(images: string[], index: number) {
     <div v-else class="empty-state">
       <AppIcon name="chat" :size="36" />
       <p>还没有任何动态</p>
-      <button v-if="auth.user" class="btn btn-tonal btn-sm" @click="openComposer()">
+      <button v-if="canCompose" class="btn btn-tonal btn-sm" @click="openComposer()">
         <AppIcon name="add" :size="16" />发布第一条
       </button>
     </div>

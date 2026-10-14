@@ -2,22 +2,29 @@
 <!-- Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika) -->
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import BaseDialog from '@/components/BaseDialog.vue'
 import { api } from '@/lib/api'
 import { excerpt } from '@/lib/markdown'
 import { formatDate, readingTime } from '@/lib/format'
-import { auth } from '@/stores/auth'
+import { auth, can } from '@/stores/auth'
 import { site } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import type { Post } from '@/lib/types'
 
+const route = useRoute()
+const routeUsername = computed(() => (route.query.username as string) || '')
 const posts = ref<Post[]>([])
 const loading = ref(true)
 const search = ref('')
 const activeCategory = ref<string>('')
 const confirmPost = ref<Post | null>(null)
+
+function canManage(post: Post) {
+  return Boolean(auth.user && (auth.user.role === 'admin' || post.author_id === auth.user.id))
+}
 
 const categories = computed(() => site.categories)
 
@@ -40,7 +47,8 @@ async function load() {
   loading.value = true
   try {
     const all = auth.user ? '&all=1' : ''
-    const res = await api<{ posts: Post[] }>(`/posts?limit=200${all}`, { auth: false })
+    const scope = routeUsername.value ? `&username=${encodeURIComponent(routeUsername.value)}` : ''
+    const res = await api<{ posts: Post[] }>(`/posts?limit=200${all}${scope}`, { auth: false })
     posts.value = res.posts
   } catch {
     notify('帖子加载失败', 'error')
@@ -50,6 +58,7 @@ async function load() {
 }
 
 onMounted(load)
+watch(routeUsername, load)
 
 async function toggleStatus(post: Post) {
   const next = post.status === 'published' ? 'hidden' : 'published'
@@ -89,10 +98,10 @@ function statusLabel(s: Post['status']) {
     <header class="blog-head">
       <div>
         <span class="md-label">BLOG</span>
-        <h1 class="md-headline">博客文章</h1>
+        <h1 class="md-headline">{{ routeUsername ? `@${routeUsername} 的文章` : '博客文章' }}</h1>
         <p class="md-muted">共 {{ posts.length }} 篇文章</p>
       </div>
-      <router-link v-if="auth.user" to="/write" class="btn btn-filled">
+      <router-link v-if="auth.user && can('post')" to="/write" class="btn btn-filled">
         <AppIcon name="edit" :size="18" />写文章
       </router-link>
     </header>
@@ -144,7 +153,7 @@ function statusLabel(s: Post['status']) {
             <div class="post-tags">
               <span v-for="t in post.tags.slice(0, 3)" :key="t" class="tag">#{{ t }}</span>
             </div>
-            <div v-if="auth.user" class="post-admin">
+            <div v-if="canManage(post)" class="post-admin">
               <button class="icon-btn sm" :title="post.status === 'published' ? '隐藏' : '公开'" @click="toggleStatus(post)">
                 <AppIcon :name="post.status === 'published' ? 'visibility' : 'visibility_off'" :size="17" />
               </button>

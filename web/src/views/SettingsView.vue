@@ -6,12 +6,14 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import ImageCropper from '@/components/ImageCropper.vue'
+import BaseDialog from '@/components/BaseDialog.vue'
 import { api, getToken, uploadFile } from '@/lib/api'
 import { auth, setUser } from '@/stores/auth'
 import {
   loadFullSettings,
   loadPublicSite,
   saveCategories,
+  saveHomepage,
   saveIntegrations,
   saveSiteSettings,
   site,
@@ -24,7 +26,7 @@ import { loadPlugins } from '@/lib/plugins'
 import type { InstalledPlugin, LinkItem, ProfileTag } from '@/lib/types'
 
 const route = useRoute()
-const validTabs = ['profile', 'site', 'categories', 'activity', 'plugins', 'account', 'storage', 'backup'] as const
+const validTabs = ['profile', 'site', 'categories', 'activity', 'plugins', 'users', 'account', 'storage', 'backup'] as const
 const tab = ref<(typeof validTabs)[number]>(
   validTabs.includes(route.query.tab as any) ? (route.query.tab as any) : 'profile'
 )
@@ -48,6 +50,7 @@ const installedPlugins = ref<InstalledPlugin[]>([])
 const pluginBusy = ref(false)
 
 const profile = reactive({ display_name: '', email: '', avatar: '', bio: '' })
+const homeBanner = reactive({ banner: '', subtitle: '', description: '' })
 const links = ref<LinkItem[]>([])
 const profileTags = ref<ProfileTag[]>([])
 const categories = ref<string[]>([])
@@ -72,7 +75,7 @@ const crop = reactive({
   height: 512,
   round: false,
   title: '',
-  target: '' as '' | 'avatar' | 'icon' | 'banner',
+  target: '' as '' | 'avatar' | 'icon' | 'banner' | 'user-banner',
 })
 
 const themeMode = computed(() => site.site.themeMode || 'preset')
@@ -114,16 +117,19 @@ const ACCENTS = [
 
 const ICON_OPTIONS = ['link', 'github', 'steam', 'nintendo', 'globe', 'code', 'article', 'chat', 'star', 'favorite', 'person', 'image']
 
-const TABS = [
-  { id: 'profile', label: '个人资料', icon: 'person' },
-  { id: 'site', label: '站点外观', icon: 'palette' },
-  { id: 'categories', label: '博客分类', icon: 'article' },
-  { id: 'activity', label: '活动集成', icon: 'history' },
-  { id: 'plugins', label: '拓展程序', icon: 'extension' },
-  { id: 'account', label: '账户安全', icon: 'lock' },
-  { id: 'storage', label: '存储空间', icon: 'storage' },
-  { id: 'backup', label: '备份与迁移', icon: 'save' },
+const isAdminUser = computed(() => auth.user?.role === 'admin')
+const ALL_TABS = [
+  { id: 'profile', label: '个人资料', icon: 'person', adminOnly: false },
+  { id: 'site', label: '站点外观', icon: 'palette', adminOnly: true },
+  { id: 'categories', label: '博客分类', icon: 'article', adminOnly: true },
+  { id: 'activity', label: '活动集成', icon: 'history', adminOnly: false },
+  { id: 'plugins', label: '拓展程序', icon: 'extension', adminOnly: false },
+  { id: 'users', label: '用户管理', icon: 'group', adminOnly: true },
+  { id: 'account', label: '账户安全', icon: 'lock', adminOnly: false },
+  { id: 'storage', label: '存储空间', icon: 'storage', adminOnly: false },
+  { id: 'backup', label: '备份与迁移', icon: 'save', adminOnly: true },
 ] as const
+const TABS = computed(() => ALL_TABS.filter((t) => isAdminUser.value || !t.adminOnly))
 
 async function load() {
   const data = await loadFullSettings()
@@ -132,6 +138,11 @@ async function load() {
   profile.email = p.email || ''
   profile.avatar = p.avatar || ''
   profile.bio = p.bio || ''
+  Object.assign(homeBanner, {
+    banner: data.homepage?.banner || '',
+    subtitle: data.homepage?.subtitle || '',
+    description: data.homepage?.description || '',
+  })
   links.value = (data.links || []).map((l) => ({ ...l }))
   profileTags.value = (data.tags || []).map((t) => ({ ...t }))
   categories.value = [...(data.categories || [])]
@@ -150,12 +161,13 @@ async function load() {
   Object.assign(steam, data.integrations.steam || {})
   nintendo.friendCode = data.integrations.nintendo?.friendCode || ''
   nintendo.games = (data.integrations.nintendo?.games || []).map((g) => ({ ...g }))
-  nintendo.zncaApiUrl = data.integrations.nintendo?.zncaApiUrl || 'https://nxapi-znca-api.fancy.org.uk/api/znca'
-  nintendo.clientId = data.integrations.nintendo?.clientId || ''
-  nintendo.clientSecret = data.integrations.nintendo?.clientSecret || ''
-  nintendo.provider = data.integrations.nintendo?.provider || 'auto'
-  nintendo.remoteConfig = data.integrations.nintendo?.remoteConfig === true
-  nintendo.configUrl = data.integrations.nintendo?.configUrl || ''
+  const ns = (data as any).nintendoServer || {}
+  nintendo.zncaApiUrl = ns.zncaApiUrl || 'https://nxapi-znca-api.fancy.org.uk/api/znca'
+  nintendo.clientId = ns.clientId || ''
+  nintendo.clientSecret = ns.clientSecret || ''
+  nintendo.provider = ns.provider || 'auto'
+  nintendo.remoteConfig = ns.remoteConfig === true
+  nintendo.configUrl = ns.configUrl || ''
   account.username = p.username || ''
 }
 
@@ -184,16 +196,27 @@ interface StorageCategory {
   files?: number
   detail?: Record<string, number>
 }
+interface StorageUser {
+  id: number
+  username: string
+  name: string
+  role: string
+  bytes: number
+}
 interface StorageOverview {
   disk: { total: number; used: number; free: number }
   site: { bytes: number; parts: { id: string; label: string; bytes: number }[] }
   uploads: { total: number; referenced: number; orphan: number; orphanCount: number }
+  limited: boolean
+  own?: { id: number; name: string; bytes: number }
+  others?: number
+  users: StorageUser[]
   categories: {
     posts: StorageCategory
     moments: StorageCategory
     system: StorageCategory
-    plugins: { id: string; name: string; enabled: boolean; bytes: number; files: number }[]
-  }
+    plugins: { id: string; name: string; owner?: string; enabled: boolean; bytes: number; files: number }[]
+  } | null
 }
 
 const storage = ref<StorageOverview | null>(null)
@@ -265,7 +288,7 @@ async function vacuumDb() {
   }
 }
 
-async function clearPluginStorage(id: string, name: string) {
+async function clearPluginStorage(owner: string, id: string, name: string) {
   const ok = await confirmDialog({
     title: '清空插件存储',
     message: `删除插件「${name}」的全部存储文件？其上传的内容将丢失。`,
@@ -275,7 +298,7 @@ async function clearPluginStorage(id: string, name: string) {
   if (!ok) return
   try {
     const r = await api<{ removed: number; bytes: number; storage: StorageOverview }>(
-      `/settings/storage/plugin/${encodeURIComponent(id)}/clear`,
+      `/settings/storage/plugin/${encodeURIComponent(id)}/clear?username=${encodeURIComponent(owner)}`,
       { method: 'POST' }
     )
     storage.value = r.storage
@@ -289,9 +312,196 @@ watch(
   tab,
   (t) => {
     if (t === 'storage' && !storage.value) loadStorage()
+    if (t === 'users' && !users.value.length) loadUsers()
   },
   { immediate: true }
 )
+
+/* ---------------- user management (admin) ---------------- */
+
+interface ManageUser {
+  id: number
+  username: string
+  display_name: string
+  email: string
+  bio: string
+  role: 'admin' | 'user'
+  permissions: { post?: boolean; moment?: boolean; plugins?: boolean }
+  pluginPermissions: string[]
+  posts: number
+  moments: number
+}
+
+const users = ref<ManageUser[]>([])
+const usersLoading = ref(false)
+const userSaving = ref(false)
+const addUserOpen = ref(false)
+const newUser = reactive({
+  username: '',
+  password: '',
+  displayName: '',
+  role: 'user' as 'admin' | 'user',
+  post: true,
+  moment: true,
+  plugins: false,
+})
+const postsDialog = reactive<{ open: boolean; user: ManageUser | null; posts: any[]; loading: boolean }>({
+  open: false,
+  user: null,
+  posts: [],
+  loading: false,
+})
+
+async function loadUsers() {
+  usersLoading.value = true
+  try {
+    const res = await api<{ users: ManageUser[] }>('/users')
+    users.value = res.users
+  } catch (e: any) {
+    notify(e.message || '加载用户失败', 'error')
+  } finally {
+    usersLoading.value = false
+  }
+}
+
+async function createUser() {
+  if (userSaving.value) return
+  userSaving.value = true
+  try {
+    await api('/users', {
+      method: 'POST',
+      body: {
+        username: newUser.username,
+        password: newUser.password,
+        displayName: newUser.displayName,
+        role: newUser.role,
+        permissions: { post: newUser.post, moment: newUser.moment, plugins: newUser.plugins },
+      },
+    })
+    notify('用户已创建', 'success')
+    addUserOpen.value = false
+    Object.assign(newUser, {
+      username: '',
+      password: '',
+      displayName: '',
+      role: 'user',
+      post: true,
+      moment: true,
+      plugins: false,
+    })
+    await loadUsers()
+  } catch (e: any) {
+    notify(e.message || '创建失败', 'error')
+  } finally {
+    userSaving.value = false
+  }
+}
+
+const KNOWN_PLUGIN_PERMS = [
+  { id: 'storage', label: '读写插件存储' },
+  { id: 'net:fetch', label: '发起网络请求' },
+  { id: 'token', label: '使用访问令牌' },
+  { id: 'posts:read', label: '读取帖子数据' },
+  { id: 'moments:read', label: '读取动态数据' },
+  { id: 'settings:read', label: '读取站点设置' },
+]
+const pluginPermDialog = reactive<{ open: boolean; user: ManageUser | null; perms: string[] }>({
+  open: false,
+  user: null,
+  perms: [],
+})
+
+function openPluginPerms(u: ManageUser) {
+  pluginPermDialog.user = u
+  pluginPermDialog.perms = Array.isArray(u.pluginPermissions) ? [...u.pluginPermissions] : []
+  pluginPermDialog.open = true
+}
+
+function togglePluginPerm(id: string) {
+  const set = new Set(pluginPermDialog.perms)
+  set.has(id) ? set.delete(id) : set.add(id)
+  pluginPermDialog.perms = [...set]
+}
+
+async function savePluginPerms() {
+  const u = pluginPermDialog.user
+  if (!u) return
+  await updateUser(u, { pluginPermissions: pluginPermDialog.perms })
+  pluginPermDialog.open = false
+}
+
+async function updateUser(u: ManageUser, patch: Record<string, unknown>) {
+  try {
+    const res = await api<{ user: ManageUser }>(`/users/${u.id}`, { method: 'PUT', body: patch })
+    const idx = users.value.findIndex((x) => x.id === u.id)
+    if (idx !== -1) users.value[idx] = res.user
+    notify('已保存', 'success')
+  } catch (e: any) {
+    notify(e.message || '保存失败', 'error')
+  }
+}
+
+function toggleUserPermission(u: ManageUser, cap: 'post' | 'moment' | 'plugins') {
+  return updateUser(u, { permissions: { ...u.permissions, [cap]: !u.permissions?.[cap] } })
+}
+
+function setUserRole(u: ManageUser, role: 'admin' | 'user') {
+  return updateUser(u, { role })
+}
+
+async function deleteUser(u: ManageUser) {
+  const ok = await confirmDialog({
+    title: '删除用户',
+    message: `删除用户「${u.display_name || u.username}」？其卡片与个人设置会一并删除，帖子/动态将失去作者归属。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await api(`/users/${u.id}`, { method: 'DELETE' })
+    notify('用户已删除', 'success')
+    users.value = users.value.filter((x) => x.id !== u.id)
+  } catch (e: any) {
+    notify(e.message || '删除失败', 'error')
+  }
+}
+
+async function openUserPosts(u: ManageUser) {
+  postsDialog.user = u
+  postsDialog.open = true
+  postsDialog.posts = []
+  postsDialog.loading = true
+  try {
+    const res = await api<{ posts: any[] }>(`/posts?author_id=${u.id}&all=1&limit=200`)
+    postsDialog.posts = res.posts
+  } catch (e: any) {
+    notify(e.message || '加载帖子失败', 'error')
+  } finally {
+    postsDialog.loading = false
+  }
+}
+
+async function deleteUserPost(p: any) {
+  const ok = await confirmDialog({ title: '删除帖子', message: `删除「${p.title}」？`, confirmText: '删除', danger: true })
+  if (!ok) return
+  try {
+    await api(`/posts/${p.id}`, { method: 'DELETE' })
+    postsDialog.posts = postsDialog.posts.filter((x) => x.id !== p.id)
+    notify('帖子已删除', 'success')
+  } catch (e: any) {
+    notify(e.message || '删除失败', 'error')
+  }
+}
+
+async function toggleUserPostStatus(p: any) {
+  const next = p.status === 'published' ? 'hidden' : 'published'
+  try {
+    await api(`/posts/${p.id}/status`, { method: 'PATCH', body: { status: next } })
+    p.status = next
+  } catch (e: any) {
+    notify(e.message || '操作失败', 'error')
+  }
+}
 
 async function startNintendoAuth() {
   naAuth.busy = true
@@ -339,11 +549,12 @@ async function unlinkNintendo() {
   }
 }
 
-function startCrop(file: File, target: 'avatar' | 'icon' | 'banner') {
+function startCrop(file: File, target: 'avatar' | 'icon' | 'banner' | 'user-banner') {
   const cfg = {
     avatar: { aspect: 1, width: 512, height: 512, round: true, title: '裁剪头像' },
     icon: { aspect: 1, width: 512, height: 512, round: false, title: '裁剪站点图标' },
     banner: { aspect: 16 / 7, width: 1920, height: 840, round: false, title: '裁剪站点横幅' },
+    'user-banner': { aspect: 16 / 7, width: 1920, height: 840, round: false, title: '裁剪主页横幅' },
   }[target]
   if (crop.src) URL.revokeObjectURL(crop.src)
   crop.src = URL.createObjectURL(file)
@@ -378,6 +589,9 @@ async function onCropDone(blob: Blob) {
     } else if (target === 'banner') {
       siteForm.banner = res.url
       await saveSiteSettings({ banner: res.url })
+    } else if (target === 'user-banner') {
+      homeBanner.banner = res.url
+      await saveHomepage({ banner: res.url })
     }
     notify('图片已更新', 'success')
   } catch (err: any) {
@@ -400,6 +614,11 @@ async function saveProfile() {
     await api('/settings/profile', { method: 'PUT', body: { ...profile } })
     await api('/settings/links', { method: 'PUT', body: { links: links.value } })
     await api('/settings/tags', { method: 'PUT', body: { tags: profileTags.value } })
+    await saveHomepage({
+      banner: homeBanner.banner,
+      subtitle: homeBanner.subtitle,
+      description: homeBanner.description,
+    })
     await loadPublicSite()
     if (auth.user) setUser({ ...auth.user, ...profile })
     notify('个人资料已保存', 'success')
@@ -460,6 +679,22 @@ async function clearBanner() {
   try {
     await saveSiteSettings({ banner: '' })
     notify('已移除横幅', 'success')
+  } catch (err: any) {
+    notify(err.message || '操作失败', 'error')
+  }
+}
+
+function onUserBannerChange(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (file) startCrop(file, 'user-banner')
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+async function clearUserBanner() {
+  homeBanner.banner = ''
+  try {
+    await saveHomepage({ banner: '' })
+    notify('已移除主页横幅', 'success')
   } catch (err: any) {
     notify(err.message || '操作失败', 'error')
   }
@@ -698,7 +933,7 @@ async function onImportFile(e: Event) {
 
 async function loadInstalledPlugins() {
   try {
-    const res = await api<{ plugins: InstalledPlugin[] }>('/plugins')
+    const res = await api<{ plugins: InstalledPlugin[] }>('/plugins/manage')
     installedPlugins.value = res.plugins
   } catch {
     /* ignore */
@@ -742,6 +977,11 @@ async function updatePlugin(p: InstalledPlugin, patch: Record<string, unknown>) 
   }
 }
 
+function canGrantPerm(perm: string) {
+  if (isAdminUser.value) return true
+  return Array.isArray(auth.user?.pluginPermissions) && auth.user!.pluginPermissions.includes(perm)
+}
+
 function togglePermission(p: InstalledPlugin, perm: string) {
   const set = new Set(p.permissions)
   set.has(perm) ? set.delete(perm) : set.add(perm)
@@ -777,6 +1017,7 @@ async function addWidgetCard(p: InstalledPlugin, widget: { id: string; title: st
 }
 
 const PERMISSION_LABELS: Record<string, string> = {
+  storage: '读写插件存储',
   'posts:read': '读取帖子数据',
   'moments:read': '读取动态数据',
   'settings:read': '读取站点设置',
@@ -837,6 +1078,41 @@ const PERMISSION_LABELS: Record<string, string> = {
           <label class="field filled">
             <textarea v-model="profile.bio" class="field-input" placeholder=" " style="min-height: 100px" />
             <span class="field-label">个人简介</span>
+          </label>
+
+          <div class="sub-head">
+            <span class="mini-label">主页横幅</span>
+          </div>
+          <p class="md-muted tiny" style="margin-bottom: 10px">
+            仅作用于你在 <code>/user/{{ account.username }}</code> 的个人主页；留空时回退到站点横幅。
+          </p>
+          <div
+            class="banner-preview"
+            :style="homeBanner.banner ? { backgroundImage: `url('${homeBanner.banner}')` } : {}"
+          >
+            <span v-if="!homeBanner.banner" class="md-muted tiny">未设置，使用站点横幅或主题渐变</span>
+          </div>
+          <div class="icon-upload-row" style="margin: 12px 0 16px">
+            <label class="btn btn-tonal btn-sm">
+              <AppIcon name="upload" :size="15" />上传并裁剪横幅
+              <input type="file" accept="image/*" hidden @change="onUserBannerChange" />
+            </label>
+            <button v-if="homeBanner.banner" class="btn btn-outlined btn-sm" @click="clearUserBanner">
+              <AppIcon name="close" :size="15" />移除横幅
+            </button>
+          </div>
+          <label class="field filled">
+            <input v-model="homeBanner.subtitle" class="field-input" placeholder=" " />
+            <span class="field-label">横幅欢迎语（可选）</span>
+          </label>
+          <label class="field filled">
+            <textarea
+              v-model="homeBanner.description"
+              class="field-input"
+              placeholder=" "
+              style="min-height: 70px"
+            />
+            <span class="field-label">横幅描述（可选）</span>
           </label>
 
           <div class="sub-head">
@@ -1157,9 +1433,10 @@ const PERMISSION_LABELS: Record<string, string> = {
               <button class="icon-btn sm" @click="removeGame(i)"><AppIcon name="close" :size="16" /></button>
             </div>
 
+            <template v-if="isAdminUser">
             <div class="divider" />
             <div class="sub-head">
-              <span class="mini-label">开发者凭据（nxapi znca 代理）</span>
+              <span class="mini-label">开发者凭据（nxapi znca 代理，全站共享）</span>
               <a class="btn btn-outlined btn-sm" :href="NSO_DOC_URL" target="_blank" rel="noopener">
                 <AppIcon name="open_in_new" :size="15" />如何获取？
               </a>
@@ -1210,6 +1487,7 @@ const PERMISSION_LABELS: Record<string, string> = {
               <input v-model="nintendo.configUrl" class="field-input" placeholder=" " />
               <span class="field-label">自定义 nxapi 配置地址（可留空，支持 file:// 或 http(s)://）</span>
             </label>
+            </template>
           </div>
 
           <div class="panel-actions">
@@ -1273,9 +1551,19 @@ const PERMISSION_LABELS: Record<string, string> = {
 
             <div v-if="p.requestedPermissions.length" class="plugin-perms">
               <span class="mini-label">权限</span>
-              <label v-for="perm in p.requestedPermissions" :key="perm" class="perm-item">
-                <input type="checkbox" :checked="p.permissions.includes(perm)" @change="togglePermission(p, perm)" />
-                <span>{{ PERMISSION_LABELS[perm] || perm }}</span>
+              <label
+                v-for="perm in p.requestedPermissions"
+                :key="perm"
+                class="perm-item"
+                :title="canGrantPerm(perm) ? '' : '管理员未授权你授予该权限'"
+              >
+                <input
+                  type="checkbox"
+                  :checked="p.permissions.includes(perm)"
+                  :disabled="!canGrantPerm(perm)"
+                  @change="togglePermission(p, perm)"
+                />
+                <span>{{ PERMISSION_LABELS[perm] || perm }}<span v-if="!canGrantPerm(perm)" class="md-muted">（未授权）</span></span>
               </label>
               <label v-if="p.requestedPermissions.includes('token')" class="field filled" style="margin-top: 8px">
                 <input v-model="p.token" class="field-input" placeholder=" " @change="updatePlugin(p, { token: p.token })" />
@@ -1362,10 +1650,57 @@ const PERMISSION_LABELS: Record<string, string> = {
           </div>
         </section>
 
+        <!-- users (admin) -->
+        <section v-show="tab === 'users'" class="card">
+          <div class="sub-head" style="margin-top: 0">
+            <h2 class="panel-title" style="margin: 0">用户管理</h2>
+            <button class="btn btn-filled btn-sm" @click="addUserOpen = true">
+              <AppIcon name="person_add" :size="16" />添加用户
+            </button>
+          </div>
+          <p class="md-muted panel-hint">管理站点用户与权限（发帖 / 发动态 / 安装插件）。</p>
+
+          <div v-if="usersLoading" class="skeleton" style="height: 120px; border-radius: 20px" />
+          <div v-else class="user-list">
+            <div v-for="u in users" :key="u.id" class="user-row">
+              <span class="avatar sm">{{ (u.display_name || u.username).charAt(0).toUpperCase() }}</span>
+              <div class="user-main">
+                <div class="user-name">
+                  {{ u.display_name || u.username }}
+                  <span v-if="u.role === 'admin'" class="badge">管理员</span>
+                </div>
+                <div class="md-muted tiny">@{{ u.username }} · {{ u.posts }} 帖 · {{ u.moments }} 动态</div>
+              </div>
+              <div class="user-perms">
+                <label class="perm"><input type="checkbox" :checked="u.role === 'admin' || u.permissions?.post" :disabled="u.role === 'admin'" @change="toggleUserPermission(u, 'post')" />发帖</label>
+                <label class="perm"><input type="checkbox" :checked="u.role === 'admin' || u.permissions?.moment" :disabled="u.role === 'admin'" @change="toggleUserPermission(u, 'moment')" />动态</label>
+                <label class="perm"><input type="checkbox" :checked="u.role === 'admin' || u.permissions?.plugins" :disabled="u.role === 'admin'" @change="toggleUserPermission(u, 'plugins')" />插件</label>
+              </div>
+              <div class="user-actions">
+                <button class="btn btn-outlined btn-sm" @click="openUserPosts(u)">
+                  <AppIcon name="article" :size="15" />帖子
+                </button>
+                <button class="btn btn-outlined btn-sm" @click="openPluginPerms(u)">
+                  <AppIcon name="extension" :size="15" />插件权限
+                </button>
+                <button class="btn btn-outlined btn-sm" @click="setUserRole(u, u.role === 'admin' ? 'user' : 'admin')">
+                  {{ u.role === 'admin' ? '设为普通' : '设为管理员' }}
+                </button>
+                <button class="icon-btn sm danger" title="删除用户" @click="deleteUser(u)">
+                  <AppIcon name="delete" :size="17" />
+                </button>
+              </div>
+            </div>
+            <p v-if="!users.length" class="md-muted tiny">还没有其他用户。</p>
+          </div>
+        </section>
+
         <!-- storage -->
         <section v-show="tab === 'storage'" class="card">
           <h2 class="panel-title">存储空间</h2>
-          <p class="md-muted panel-hint">查看服务器磁盘与本站各类数据的占用，并清理不需要的空间。</p>
+          <p class="md-muted panel-hint">
+            {{ isAdminUser ? '查看服务器磁盘、站点与各用户占用，并清理不需要的空间。' : '查看服务器磁盘与你自己的存储占用。' }}
+          </p>
 
           <div v-if="storageLoading || !storage" class="skeleton" style="height: 160px; border-radius: 20px" />
           <template v-else>
@@ -1373,8 +1708,7 @@ const PERMISSION_LABELS: Record<string, string> = {
               <div class="storage-row-head">
                 <span class="mini-label">服务器磁盘</span>
                 <span class="md-muted">
-                  已用 {{ fmtBytes(storage.disk.used) }} / {{ fmtBytes(storage.disk.total) }} · 剩余
-                  {{ fmtBytes(storage.disk.free) }}
+                  已用 {{ fmtBytes(storage.disk.used) }} / {{ fmtBytes(storage.disk.total) }} · 剩余 {{ fmtBytes(storage.disk.free) }}
                 </span>
               </div>
               <div class="storage-bar">
@@ -1382,82 +1716,162 @@ const PERMISSION_LABELS: Record<string, string> = {
               </div>
             </div>
 
-            <div class="storage-block">
-              <div class="storage-row-head">
-                <span class="mini-label">站点占用</span>
-                <strong>{{ fmtBytes(storage.site.bytes) }}</strong>
-              </div>
-              <div class="storage-parts">
-                <div v-for="part in storage.site.parts" :key="part.id" class="storage-part">
-                  <span>{{ part.label }}</span>
-                  <span class="md-muted">{{ fmtBytes(part.bytes) }}</span>
+            <template v-if="storage.limited">
+              <div class="storage-cats">
+                <div class="storage-cat">
+                  <span class="sc-icon"><AppIcon name="person" :size="18" /></span>
+                  <div class="sc-main"><strong>我的存储</strong><span class="md-muted">{{ storage.own?.name || '我' }}</span></div>
+                  <span class="sc-size">{{ fmtBytes(storage.own?.bytes || 0) }}</span>
+                </div>
+                <div class="storage-cat">
+                  <span class="sc-icon"><AppIcon name="group" :size="18" /></span>
+                  <div class="sc-main"><strong>其他用户的数据</strong><span class="md-muted">合计</span></div>
+                  <span class="sc-size">{{ fmtBytes(storage.others || 0) }}</span>
                 </div>
               </div>
-            </div>
+            </template>
 
-            <div class="sub-head"><span class="mini-label">分类占用</span></div>
-            <div class="storage-cats">
-              <div class="storage-cat">
-                <span class="sc-icon"><AppIcon name="article" :size="18" /></span>
-                <div class="sc-main">
-                  <strong>帖子</strong>
-                  <span class="md-muted">图片 {{ storage.categories.posts.files || 0 }} 个</span>
+            <template v-else>
+              <div class="storage-block">
+                <div class="storage-row-head">
+                  <span class="mini-label">站点占用</span>
+                  <strong>{{ fmtBytes(storage.site.bytes) }}</strong>
                 </div>
-                <span class="sc-size">{{ fmtBytes(storage.categories.posts.bytes) }}</span>
-              </div>
-              <div class="storage-cat">
-                <span class="sc-icon"><AppIcon name="chat" :size="18" /></span>
-                <div class="sc-main">
-                  <strong>动态</strong>
-                  <span class="md-muted">图片 {{ storage.categories.moments.files || 0 }} 个</span>
+                <div class="storage-parts">
+                  <div v-for="part in storage.site.parts" :key="part.id" class="storage-part">
+                    <span>{{ part.label }}</span><span class="md-muted">{{ fmtBytes(part.bytes) }}</span>
+                  </div>
                 </div>
-                <span class="sc-size">{{ fmtBytes(storage.categories.moments.bytes) }}</span>
               </div>
-              <div class="storage-cat">
-                <span class="sc-icon"><AppIcon name="settings" :size="18" /></span>
-                <div class="sc-main">
-                  <strong>站点系统</strong>
-                  <span class="md-muted">数据库与站点素材</span>
-                </div>
-                <span class="sc-size">{{ fmtBytes(storage.categories.system.bytes) }}</span>
-              </div>
-            </div>
 
-            <div class="storage-block">
-              <div class="storage-row-head">
-                <span class="mini-label">插件</span>
-                <span class="md-muted">{{ storage.categories.plugins.length }} 个</span>
-              </div>
-              <div v-for="p in storage.categories.plugins" :key="p.id" class="storage-plugin">
-                <div class="sc-main">
-                  <strong>{{ p.name }}</strong>
-                  <span class="md-muted">{{ p.files }} 个文件 · {{ p.enabled ? '已启用' : '已停用' }}</span>
+              <div class="sub-head"><span class="mini-label">分类占用</span></div>
+              <div v-if="storage.categories" class="storage-cats">
+                <div class="storage-cat">
+                  <span class="sc-icon"><AppIcon name="article" :size="18" /></span>
+                  <div class="sc-main"><strong>帖子</strong><span class="md-muted">图片 {{ storage.categories.posts.files || 0 }} 个</span></div>
+                  <span class="sc-size">{{ fmtBytes(storage.categories.posts.bytes) }}</span>
                 </div>
-                <span class="sc-size">{{ fmtBytes(p.bytes) }}</span>
-                <button class="btn btn-danger btn-sm" :disabled="!p.bytes" @click="clearPluginStorage(p.id, p.name)">
-                  清空
-                </button>
+                <div class="storage-cat">
+                  <span class="sc-icon"><AppIcon name="chat" :size="18" /></span>
+                  <div class="sc-main"><strong>动态</strong><span class="md-muted">图片 {{ storage.categories.moments.files || 0 }} 个</span></div>
+                  <span class="sc-size">{{ fmtBytes(storage.categories.moments.bytes) }}</span>
+                </div>
+                <div class="storage-cat">
+                  <span class="sc-icon"><AppIcon name="settings" :size="18" /></span>
+                  <div class="sc-main"><strong>站点系统</strong><span class="md-muted">数据库与站点素材</span></div>
+                  <span class="sc-size">{{ fmtBytes(storage.categories.system.bytes) }}</span>
+                </div>
               </div>
-              <p v-if="!storage.categories.plugins.length" class="md-muted tiny">还没有安装插件。</p>
-            </div>
 
-            <p class="md-muted tiny" style="margin-top: 4px">
-              孤立文件：{{ storage.uploads.orphanCount || 0 }} 个（{{ fmtBytes(storage.uploads.orphan) }}），可一并清理。
-            </p>
+              <div class="storage-block">
+                <div class="storage-row-head"><span class="mini-label">各用户占用</span><span class="md-muted">{{ storage.users.length }} 位</span></div>
+                <div v-for="u in storage.users" :key="u.id" class="storage-plugin">
+                  <div class="sc-main">
+                    <strong>{{ u.name }}</strong>
+                    <span class="md-muted">@{{ u.username }}{{ u.role === 'admin' ? ' · 管理员' : '' }}</span>
+                  </div>
+                  <span class="sc-size">{{ fmtBytes(u.bytes) }}</span>
+                </div>
+              </div>
 
-            <div class="panel-actions">
-              <button class="btn btn-outlined" @click="loadStorage">
-                <AppIcon name="refresh" :size="16" />刷新
-              </button>
-              <button class="btn btn-outlined" @click="cleanOrphans">
-                <AppIcon name="delete" :size="16" />清理孤立文件
-              </button>
-              <button class="btn btn-outlined" @click="vacuumDb">
-                <AppIcon name="storage" :size="16" />整理数据库
-              </button>
-            </div>
+              <div v-if="storage.categories" class="storage-block">
+                <div class="storage-row-head"><span class="mini-label">插件</span><span class="md-muted">{{ storage.categories.plugins.length }} 个</span></div>
+                <div v-for="pl in storage.categories.plugins" :key="pl.id" class="storage-plugin">
+                  <div class="sc-main">
+                    <strong>{{ pl.name }}</strong>
+                    <span class="md-muted">{{ pl.files }} 个文件 · {{ pl.enabled ? '已启用' : '已停用' }}</span>
+                  </div>
+                  <span class="sc-size">{{ fmtBytes(pl.bytes) }}</span>
+                  <button class="btn btn-danger btn-sm" :disabled="!pl.bytes" @click="clearPluginStorage(pl.owner || '', pl.id, pl.name)">清空</button>
+                </div>
+                <p v-if="!storage.categories.plugins.length" class="md-muted tiny">还没有安装插件。</p>
+              </div>
+
+              <p class="md-muted tiny" style="margin-top: 4px">
+                孤立文件：{{ storage.uploads.orphanCount || 0 }} 个（{{ fmtBytes(storage.uploads.orphan) }}）。
+              </p>
+
+              <div class="panel-actions">
+                <button class="btn btn-outlined" @click="loadStorage"><AppIcon name="refresh" :size="16" />刷新</button>
+                <button class="btn btn-outlined" @click="cleanOrphans"><AppIcon name="delete" :size="16" />清理孤立文件</button>
+                <button class="btn btn-outlined" @click="vacuumDb"><AppIcon name="storage" :size="16" />整理数据库</button>
+              </div>
+            </template>
           </template>
         </section>
+
+    <!-- add user -->
+    <BaseDialog :open="addUserOpen" title="添加用户" @close="addUserOpen = false">
+      <label class="field filled">
+        <input v-model="newUser.username" class="field-input" placeholder=" " />
+        <span class="field-label">用户名（3-32 位字母数字，用于登录）</span>
+      </label>
+      <label class="field filled">
+        <input v-model="newUser.displayName" class="field-input" placeholder=" " />
+        <span class="field-label">昵称</span>
+      </label>
+      <label class="field filled">
+        <input v-model="newUser.password" type="password" class="field-input" placeholder=" " />
+        <span class="field-label">密码（至少 6 位）</span>
+      </label>
+      <div class="perm-row">
+        <span class="mini-label">权限</span>
+        <label class="perm"><input type="checkbox" v-model="newUser.post" />发帖</label>
+        <label class="perm"><input type="checkbox" v-model="newUser.moment" />发动态</label>
+        <label class="perm"><input type="checkbox" v-model="newUser.plugins" />安装插件</label>
+        <label class="perm">
+          <input type="checkbox" :checked="newUser.role === 'admin'" @change="newUser.role = ($event.target as HTMLInputElement).checked ? 'admin' : 'user'" />管理员
+        </label>
+      </div>
+      <template #actions>
+        <button class="btn" @click="addUserOpen = false">取消</button>
+        <button class="btn btn-filled" :disabled="userSaving" @click="createUser">
+          <AppIcon name="check" :size="16" />创建
+        </button>
+      </template>
+    </BaseDialog>
+
+    <!-- user posts -->
+    <BaseDialog
+      :open="postsDialog.open"
+      :title="`${postsDialog.user?.display_name || postsDialog.user?.username || ''} 的帖子`"
+      wide
+      @close="postsDialog.open = false"
+    >
+      <div v-if="postsDialog.loading" class="skeleton" style="height: 100px; border-radius: 16px" />
+      <div v-else class="user-posts">
+        <div v-for="p in postsDialog.posts" :key="p.id" class="user-post-row">
+          <div class="up-main">
+            <div class="up-title">{{ p.title }}</div>
+            <div class="md-muted tiny">{{ p.status }} · {{ p.created_at }}</div>
+          </div>
+          <button class="btn btn-outlined btn-sm" @click="toggleUserPostStatus(p)">
+            {{ p.status === 'published' ? '隐藏' : '发布' }}
+          </button>
+          <button class="icon-btn sm danger" title="删除" @click="deleteUserPost(p)">
+            <AppIcon name="delete" :size="17" />
+          </button>
+        </div>
+        <p v-if="!postsDialog.posts.length" class="md-muted tiny">该用户还没有帖子。</p>
+      </div>
+    </BaseDialog>
+
+    <!-- per-user grantable plugin permissions -->
+    <BaseDialog :open="pluginPermDialog.open" title="可授予插件的权限" @close="pluginPermDialog.open = false">
+      <p class="md-muted tiny" style="margin-top: 0">
+        勾选该用户安装插件时<strong>允许授予</strong>的权限。未勾选的权限，用户无法授予其安装的插件。
+      </p>
+      <div class="perm-grid">
+        <label v-for="perm in KNOWN_PLUGIN_PERMS" :key="perm.id" class="perm">
+          <input type="checkbox" :checked="pluginPermDialog.perms.includes(perm.id)" @change="togglePluginPerm(perm.id)" />
+          {{ perm.label }}
+        </label>
+      </div>
+      <template #actions>
+        <button class="btn" @click="pluginPermDialog.open = false">取消</button>
+        <button class="btn btn-filled" @click="savePluginPerms"><AppIcon name="check" :size="16" />保存</button>
+      </template>
+    </BaseDialog>
 
         <!-- backup -->
         <section v-show="tab === 'backup'" class="card">
@@ -2039,4 +2453,28 @@ const PERMISSION_LABELS: Record<string, string> = {
 .storage-plugin:first-of-type {
   border-top: none;
 }
+
+/* ---------------- users ---------------- */
+.user-list { display: flex; flex-direction: column; gap: 8px; }
+.user-row {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 18px;
+  background: var(--md-surface-container-high);
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 45%, transparent);
+  flex-wrap: wrap;
+}
+.user-main { flex: 1; min-width: 160px; }
+.user-name { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.user-perms { display: flex; gap: 10px; flex-wrap: wrap; }
+.perm { display: inline-flex; align-items: center; gap: 5px; font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.perm input { accent-color: var(--md-primary); }
+.user-actions { display: flex; align-items: center; gap: 6px; }
+.perm-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 6px 0 4px; }
+.perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 16px; margin: 8px 0; }
+.user-posts { display: flex; flex-direction: column; gap: 6px; }
+.user-post-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px;
+  background: var(--md-surface-container-high);
+}
+.up-main { flex: 1; min-width: 0; }
+.up-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

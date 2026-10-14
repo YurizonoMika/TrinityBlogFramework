@@ -7,14 +7,34 @@ import AppIcon from './AppIcon.vue'
 import { site } from '@/stores/site'
 import { auth } from '@/stores/auth'
 import { useParallax } from '@/lib/useParallax'
+import type { HomepageSettings, PublicProfile } from '@/lib/types'
 
-const profile = computed(() => site.profile)
+const props = defineProps<{
+  profile?: PublicProfile | null
+  homepage?: HomepageSettings | null
+  username?: string
+}>()
+
+const blogTo = computed(() =>
+  props.username ? { path: '/blog', query: { username: props.username } } : '/blog'
+)
+const momentsTo = computed(() =>
+  props.username ? { path: '/moments', query: { username: props.username } } : '/moments'
+)
+
+const profile = computed(() => props.profile || site.profile)
 const initial = computed(() => (profile.value?.display_name || 'A').trim().charAt(0).toUpperCase())
 const tags = computed(() => profile.value?.tags || [])
-const subtitle = computed(() => site.site.subtitle || '欢迎来到我的小站')
-const banner = computed(() => site.site.banner || '')
+const banner = computed(() => props.homepage?.banner || site.site.banner || '')
+const subtitle = computed(
+  () => props.homepage?.subtitle || site.site.subtitle || '欢迎来到我的小站'
+)
 const description = computed(
-  () => site.site.description || profile.value?.bio || '这里记录我的开发与生活。'
+  () =>
+    props.homepage?.description ||
+    site.site.description ||
+    profile.value?.bio ||
+    '这里记录我的开发与生活。'
 )
 
 const bgRef = ref<HTMLElement | null>(null)
@@ -45,8 +65,11 @@ useParallax(bgRef, 0.3, 140)
         </h1>
         <p class="banner-desc">{{ description }}</p>
         <div class="banner-actions">
-          <router-link to="/blog" class="btn btn-glass">
+          <router-link :to="blogTo" class="btn btn-glass">
             <AppIcon name="article" :size="18" />阅读博客
+          </router-link>
+          <router-link :to="momentsTo" class="btn btn-glass">
+            <AppIcon name="chat" :size="18" />动态
           </router-link>
           <router-link v-if="auth.user" to="/write" class="btn btn-glass">
             <AppIcon name="edit" :size="18" />写新文章

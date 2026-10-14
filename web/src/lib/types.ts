@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
+export interface UserPermissions {
+  post?: boolean
+  moment?: boolean
+  plugins?: boolean
+}
+
 export interface User {
   id: number
   username: string
@@ -8,6 +14,9 @@ export interface User {
   email: string
   avatar: string
   bio: string
+  role: 'admin' | 'user'
+  permissions: UserPermissions
+  pluginPermissions: string[]
   created_at: string
 }
 
@@ -22,6 +31,9 @@ export interface Post {
   category?: string
   status: 'published' | 'hidden' | 'draft'
   author_id: number | null
+  author_name?: string
+  author_username?: string
+  author_avatar?: string
   views: number
   created_at: string
   updated_at: string
@@ -66,6 +78,7 @@ export interface PluginEditorTool {
 
 export interface RuntimePlugin {
   id: string
+  owner?: string
   name: string
   version: string
   rev: string
@@ -84,6 +97,7 @@ export interface RuntimePlugin {
 
 export interface InstalledPlugin {
   id: string
+  owner?: string
   name: string
   version: string
   description: string
@@ -109,6 +123,7 @@ export interface InstalledPlugin {
 }
 export interface Card {
   id: string
+  user_id?: number
   type: CardType
   title: string
   config: Record<string, any>
@@ -129,6 +144,12 @@ export interface SiteSettings {
   themeSource?: 'icon' | 'banner' | 'custom'
   themeSeed?: string
   themeSeedColor?: string
+}
+
+export interface HomepageSettings {
+  banner?: string
+  subtitle?: string
+  description?: string
 }
 
 export interface Integrations {
@@ -158,11 +179,13 @@ export interface ProfileTag {
 }
 
 export interface PublicProfile {
+  id?: number
   display_name: string
   username: string
   avatar: string
   bio: string
   email: string
+  role?: 'admin' | 'user'
   links: LinkItem[]
   tags: ProfileTag[]
 }

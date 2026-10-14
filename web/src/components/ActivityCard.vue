@@ -10,7 +10,7 @@ import { formatRelative } from '@/lib/format'
 import { auth } from '@/stores/auth'
 import type { ActivityResponse, Card } from '@/lib/types'
 
-const props = defineProps<{ card?: Card }>()
+const props = defineProps<{ card?: Card; username?: string }>()
 
 const providers = computed<string[]>(() => {
   const cfg = props.card?.config?.providers
@@ -30,10 +30,9 @@ const PROVIDER_META: Record<string, { icon: string; label: string }> = {
 async function load() {
   loading.value = true
   try {
-    const res = await api<ActivityResponse>(
-      `/activity?providers=${providers.value.join(',')}`,
-      { auth: false }
-    )
+    const q = new URLSearchParams({ providers: providers.value.join(',') })
+    if (props.username) q.set('username', props.username)
+    const res = await api<ActivityResponse>(`/activity?${q.toString()}`, { auth: false })
     data.value = res.activity
   } catch {
     data.value = {}

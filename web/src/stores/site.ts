@@ -10,11 +10,19 @@ import {
   loadDynamicThemeFromHex,
   loadDynamicThemeFromImage,
 } from '@/lib/dynamicTheme'
-import type { Integrations, LinkItem, ProfileTag, PublicProfile, SiteSettings } from '@/lib/types'
+import type {
+  HomepageSettings,
+  Integrations,
+  LinkItem,
+  ProfileTag,
+  PublicProfile,
+  SiteSettings,
+} from '@/lib/types'
 
 interface SiteState {
   site: SiteSettings
   profile: PublicProfile | null
+  homepage: HomepageSettings
   integrations: Integrations
   categories: string[]
   theme: 'light' | 'dark'
@@ -26,6 +34,7 @@ const THEME_KEY = 'homepage.theme'
 export const site = reactive<SiteState>({
   site: {},
   profile: null,
+  homepage: {},
   integrations: {},
   categories: [],
   theme: (localStorage.getItem(THEME_KEY) as 'light' | 'dark') || 'light',
@@ -102,11 +111,13 @@ export async function loadPublicSite() {
   const data = await api<{
     site: SiteSettings
     profile: PublicProfile
+    homepage: HomepageSettings
     categories: string[]
     integrations: Integrations
   }>('/settings/public', { auth: false })
   site.site = data.site || {}
   site.profile = data.profile
+  site.homepage = data.homepage || {}
   site.categories = data.categories || []
   site.integrations = data.integrations || {}
   site.loaded = true
@@ -122,12 +133,23 @@ export async function loadFullSettings() {
     tags: ProfileTag[]
     categories: string[]
     profile: any
+    homepage: HomepageSettings
   }>('/settings')
   site.site = data.site || {}
   site.integrations = data.integrations || {}
+  site.homepage = data.homepage || {}
   site.categories = data.categories || []
   applyTheme()
   return data
+}
+
+export async function saveHomepage(patch: HomepageSettings) {
+  const { homepage } = await api<{ homepage: HomepageSettings }>('/settings/homepage', {
+    method: 'PUT',
+    body: patch,
+  })
+  site.homepage = homepage
+  return homepage
 }
 
 export async function saveCategories(categories: string[]) {

@@ -5,8 +5,10 @@
 import { computed } from 'vue'
 import AppIcon from './AppIcon.vue'
 import { site } from '@/stores/site'
+import type { PublicProfile } from '@/lib/types'
 
-const profile = computed(() => site.profile)
+const props = defineProps<{ profile?: PublicProfile | null }>()
+const profile = computed(() => props.profile ?? site.profile)
 const initial = computed(() => (profile.value?.display_name || 'A').trim().charAt(0).toUpperCase())
 const links = computed(() => profile.value?.links || [])
 </script>

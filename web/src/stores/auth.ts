@@ -23,6 +23,17 @@ export function isLoggedIn(): boolean {
   return Boolean(auth.user)
 }
 
+export function isAdmin(): boolean {
+  return auth.user?.role === 'admin'
+}
+
+/** Whether the current user has a capability (admins always do). */
+export function can(cap: 'post' | 'moment' | 'plugins'): boolean {
+  if (!auth.user) return false
+  if (auth.user.role === 'admin') return true
+  return Boolean(auth.user.permissions?.[cap])
+}
+
 export async function bootstrap(): Promise<void> {
   if (bootstrapPromise) return bootstrapPromise
   bootstrapPromise = (async () => {

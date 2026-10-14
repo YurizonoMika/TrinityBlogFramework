@@ -8,16 +8,20 @@ import type { RuntimePlugin } from '@/lib/types'
 interface PluginState {
   list: RuntimePlugin[]
   loaded: boolean
+  owner: string
 }
 
 export const plugins = reactive<PluginState>({
   list: [],
   loaded: false,
+  owner: '',
 })
 
-export async function loadPlugins() {
+export async function loadPlugins(owner = '') {
+  plugins.owner = owner
   try {
-    const res = await api<{ plugins: RuntimePlugin[] }>('/plugins/runtime')
+    const qs = owner ? `?username=${encodeURIComponent(owner)}` : ''
+    const res = await api<{ plugins: RuntimePlugin[] }>(`/plugins/runtime${qs}`)
     plugins.list = res.plugins
     plugins.loaded = true
   } catch {
