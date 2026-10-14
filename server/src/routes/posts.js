@@ -3,9 +3,16 @@
 
 import { Router } from 'express'
 import { db } from '../db.js'
-import { requireAuth, isAuthed } from '../auth.js'
+import { requireAuth, isAuthed, can } from '../auth.js'
+import { pageUsername } from '../scope.js'
 
 const router = Router()
+
+function ownsOrAdmin(user, row) {
+  if (!user) return false
+  if (user.role === 'admin') return true
+  return row.author_id != null && row.author_id === user.id
+}
 
 function slugify(input) {
   const base = String(input || '')
@@ -55,20 +62,42 @@ router.get('/', (req, res) => {
 
   const where = []
   const params = []
-  if (!all) where.push("status = 'published'")
+  if (!all) where.push("p.status = 'published'")
   if (category) {
-    where.push('category = ?')
+    where.push('p.category = ?')
     params.push(category)
+  }
+  // filter by a specific author (used by /user/:username and admin management)
+  const username = (pageUsername(req) || '').trim()
+  const authorId = req.query.author_id ? Number(req.query.author_id) : null
+  let author = null
+  if (username) {
+    const u = db.prepare('SELECT id FROM users WHERE username = ?').get(username)
+    if (!u) return res.json({ posts: [] })
+    author = u.id
+  } else if (authorId) {
+    author = authorId
+  }
+  if (author != null) {
+    where.push('p.author_id = ?')
+    params.push(author)
   }
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
   const rows = db
-    .prepare(`SELECT * FROM posts ${clause} ORDER BY datetime(created_at) DESC LIMIT ?`)
+    .prepare(
+      `SELECT p.*, u.display_name AS author_name, u.username AS author_username, u.avatar AS author_avatar
+       FROM posts p LEFT JOIN users u ON u.id = p.author_id
+       ${clause} ORDER BY datetime(p.created_at) DESC LIMIT ?`
+    )
     .all(...params, limit)
   res.json({ posts: rows.map(parsePost) })
 })
 
+const POST_SELECT = `SELECT p.*, u.display_name AS author_name, u.username AS author_username, u.avatar AS author_avatar
+   FROM posts p LEFT JOIN users u ON u.id = p.author_id`
+
 router.get('/:slug', (req, res) => {
-  const row = db.prepare('SELECT * FROM posts WHERE slug = ?').get(req.params.slug)
+  const row = db.prepare(`${POST_SELECT} WHERE p.slug = ?`).get(req.params.slug)
   if (!row) return res.status(404).json({ error: '帖子不存在' })
   if (row.status !== 'published' && !isAuthed(req)) {
     return res.status(404).json({ error: '帖子不存在' })
@@ -81,6 +110,7 @@ router.get('/:slug', (req, res) => {
 })
 
 router.post('/', requireAuth, (req, res) => {
+  if (!can(req.user, 'post')) return res.status(403).json({ error: '你没有发帖权限' })
   const { title, content, summary, cover, status, slug, tags, category } = req.body || {}
   if (!title || !title.trim()) return res.status(400).json({ error: '标题不能为空' })
   const finalSlug = uniqueSlug(slug || title)
@@ -107,6 +137,7 @@ router.post('/', requireAuth, (req, res) => {
 router.put('/:id', requireAuth, (req, res) => {
   const existing = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id)
   if (!existing) return res.status(404).json({ error: '帖子不存在' })
+  if (!ownsOrAdmin(req.user, existing)) return res.status(403).json({ error: '无权修改该帖子' })
   const { title, content, summary, cover, status, slug, tags, category } = req.body || {}
   const finalSlug =
     slug && slugify(slug) !== existing.slug ? uniqueSlug(slug, existing.id) : existing.slug
@@ -133,17 +164,21 @@ router.patch('/:id/status', requireAuth, (req, res) => {
   if (!['published', 'hidden', 'draft'].includes(status)) {
     return res.status(400).json({ error: '无效的状态' })
   }
+  const existing = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id)
+  if (!existing) return res.status(404).json({ error: '帖子不存在' })
+  if (!ownsOrAdmin(req.user, existing)) return res.status(403).json({ error: '无权修改该帖子' })
   const info = db
     .prepare("UPDATE posts SET status = ?, updated_at = datetime('now') WHERE id = ?")
     .run(status, req.params.id)
-  if (!info.changes) return res.status(404).json({ error: '帖子不存在' })
   const row = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id)
   res.json({ post: parsePost(row) })
 })
 
 router.delete('/:id', requireAuth, (req, res) => {
-  const info = db.prepare('DELETE FROM posts WHERE id = ?').run(req.params.id)
-  if (!info.changes) return res.status(404).json({ error: '帖子不存在' })
+  const existing = db.prepare('SELECT * FROM posts WHERE id = ?').get(req.params.id)
+  if (!existing) return res.status(404).json({ error: '帖子不存在' })
+  if (!ownsOrAdmin(req.user, existing)) return res.status(403).json({ error: '无权删除该帖子' })
+  db.prepare('DELETE FROM posts WHERE id = ?').run(req.params.id)
   res.json({ ok: true })
 })
 

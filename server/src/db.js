@@ -27,12 +27,22 @@ db.exec(`
     email         TEXT NOT NULL DEFAULT '',
     avatar        TEXT NOT NULL DEFAULT '',
     bio           TEXT NOT NULL DEFAULT '',
+    role          TEXT NOT NULL DEFAULT 'user',
+    permissions   TEXT NOT NULL DEFAULT '{}',
+    plugin_permissions TEXT NOT NULL DEFAULT '[]',
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER NOT NULL,
+    key     TEXT NOT NULL,
+    value   TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
   );
 
   CREATE TABLE IF NOT EXISTS posts (
@@ -53,6 +63,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS cards (
     id          TEXT PRIMARY KEY,
+    user_id     INTEGER,
     type        TEXT NOT NULL,
     title       TEXT NOT NULL DEFAULT '',
     config      TEXT NOT NULL DEFAULT '{}',
@@ -74,10 +85,112 @@ db.exec(`
 `)
 
 // migrations for databases created before a column was introduced
-try {
-  db.exec("ALTER TABLE posts ADD COLUMN category TEXT NOT NULL DEFAULT ''")
-} catch {
-  /* column already exists */
+for (const sql of [
+  "ALTER TABLE posts ADD COLUMN category TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+  "ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '{}'",
+  "ALTER TABLE users ADD COLUMN plugin_permissions TEXT NOT NULL DEFAULT '[]'",
+  'ALTER TABLE cards ADD COLUMN user_id INTEGER',
+]) {
+  try {
+    db.exec(sql)
+  } catch {
+    /* column already exists */
+  }
+}
+
+// the first (site owner) account becomes the admin
+db.exec(
+  `UPDATE users SET role = 'admin'
+   WHERE id = (SELECT MIN(id) FROM users)
+     AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`
+)
+// legacy cards + content belong to the admin
+db.exec(
+  `UPDATE cards SET user_id = (SELECT MIN(id) FROM users)
+   WHERE user_id IS NULL AND EXISTS (SELECT 1 FROM users)`
+)
+db.exec(
+  `UPDATE posts SET author_id = (SELECT MIN(id) FROM users)
+   WHERE author_id IS NULL AND EXISTS (SELECT 1 FROM users)`
+)
+db.exec(
+  `UPDATE moments SET author_id = (SELECT MIN(id) FROM users)
+   WHERE author_id IS NULL AND EXISTS (SELECT 1 FROM users)`
+)
+
+migrateLegacyUserData()
+
+/**
+ * Deep-merge legacy global per-user settings (integrations / links / tags /
+ * nintendo_auth) into the owner's user_settings — so nothing is stranded when a
+ * database is upgraded to the multi-user layout. Safe to call repeatedly.
+ */
+export function migrateLegacyUserData() {
+  try {
+    const owner = primaryUserId()
+    if (owner == null) return
+    const legacyGet = (key) => {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key)
+      if (!row) return null
+      try {
+        return JSON.parse(row.value)
+      } catch {
+        return null
+      }
+    }
+    const currentRow = (key) =>
+      db.prepare('SELECT value FROM user_settings WHERE user_id = ? AND key = ?').get(owner, key) || null
+    const save = (key, value) =>
+      db
+        .prepare(
+          `INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?)
+           ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
+        )
+        .run(owner, key, JSON.stringify(value))
+    const parse = (row) => {
+      if (!row) return null
+      try {
+        return JSON.parse(row.value)
+      } catch {
+        return null
+      }
+    }
+
+    const legacyI = legacyGet('integrations')
+    if (legacyI && typeof legacyI === 'object') {
+      const currentI = parse(currentRow('integrations'))
+      const merged = { ...(currentI && typeof currentI === 'object' ? currentI : {}) }
+      let changed = currentI == null
+      for (const [provider, legacyVal] of Object.entries(legacyI)) {
+        const curVal = merged[provider]
+        if (curVal === undefined) {
+          merged[provider] = legacyVal
+          changed = true
+          continue
+        }
+        if (legacyVal && typeof legacyVal === 'object') {
+          const sub = { ...legacyVal }
+          for (const [field, v] of Object.entries(curVal || {})) {
+            const empty = v === '' || v == null || (Array.isArray(v) && v.length === 0)
+            if (!empty) sub[field] = v
+          }
+          if (JSON.stringify(sub) !== JSON.stringify(curVal)) {
+            merged[provider] = sub
+            changed = true
+          }
+        }
+      }
+      if (changed) save('integrations', merged)
+    }
+    for (const key of ['links', 'tags', 'nintendo_auth']) {
+      if (currentRow(key)) continue
+      const value = legacyGet(key)
+      if (value != null) save(key, value)
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 export function getSetting(key, fallback = null) {
@@ -112,6 +225,48 @@ export function allSettings() {
   return out
 }
 
+/** Per-user settings (profile links/tags, integrations, plugin state, …). */
+export function getUserSetting(userId, key, fallback = null) {
+  const row = db
+    .prepare('SELECT value FROM user_settings WHERE user_id = ? AND key = ?')
+    .get(userId, key)
+  if (!row) return fallback
+  try {
+    return JSON.parse(row.value)
+  } catch {
+    return row.value
+  }
+}
+
+export function setUserSetting(userId, key, value) {
+  db.prepare(
+    `INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?)
+     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`
+  ).run(userId, key, JSON.stringify(value))
+  return value
+}
+
+export function allUserSettings(userId) {
+  const rows = db.prepare('SELECT key, value FROM user_settings WHERE user_id = ?').all(userId)
+  const out = {}
+  for (const row of rows) {
+    try {
+      out[row.key] = JSON.parse(row.value)
+    } catch {
+      out[row.key] = row.value
+    }
+  }
+  return out
+}
+
+/** The site owner's user id (first admin, else first user). */
+export function primaryUserId() {
+  const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get()
+  if (admin) return admin.id
+  const first = db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get()
+  return first ? first.id : null
+}
+
 export function isSetupComplete() {
   const row = db.prepare('SELECT COUNT(*) AS n FROM users').get()
   return row.n > 0
@@ -141,14 +296,15 @@ const DEFAULT_CARDS = [
   },
 ]
 
-export function seedDefaultCards() {
-  const row = db.prepare('SELECT COUNT(*) AS n FROM cards').get()
+export function seedDefaultCards(userId = primaryUserId()) {
+  if (userId == null) return
+  const row = db.prepare('SELECT COUNT(*) AS n FROM cards WHERE user_id = ?').get(userId)
   if (row.n > 0) return
   const insert = db.prepare(
-    `INSERT INTO cards (id, type, title, config, position, width, visible)
-     VALUES (?, ?, ?, ?, ?, ?, 1)`
+    `INSERT INTO cards (id, user_id, type, title, config, position, width, visible)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
   )
   DEFAULT_CARDS.forEach((card, index) => {
-    insert.run(card.id, card.type, card.title, JSON.stringify(card.config), index, card.width)
+    insert.run(`${card.id}-${userId}`, userId, card.type, card.title, JSON.stringify(card.config), index, card.width)
   })
 }

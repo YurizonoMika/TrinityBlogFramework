@@ -4,9 +4,9 @@
 import { Router } from 'express'
 import multer from 'multer'
 import AdmZip from 'adm-zip'
-import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, relative, dirname } from 'node:path'
-import { db, allSettings, setSetting, UPLOAD_DIR } from '../db.js'
+import { db, allSettings, setSetting, UPLOAD_DIR, DATA_DIR, migrateLegacyUserData } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { resetCache } from '../nintendo.js'
 import { PLUGINS_DIR, loadAllPlugins } from '../plugins.js'
@@ -33,6 +33,7 @@ router.get('/export', (req, res) => {
     data: {
       settings,
       users: db.prepare('SELECT * FROM users ORDER BY id').all(),
+      userSettings: db.prepare('SELECT * FROM user_settings').all(),
       posts: db.prepare('SELECT * FROM posts ORDER BY id').all(),
       moments: db.prepare('SELECT * FROM moments ORDER BY id').all(),
       cards: db.prepare('SELECT * FROM cards ORDER BY position').all(),
@@ -42,15 +43,37 @@ router.get('/export', (req, res) => {
   const zip = new AdmZip()
   zip.addFile('data.json', Buffer.from(JSON.stringify(backup, null, 2), 'utf-8'))
 
-  for (const file of readdirSync(UPLOAD_DIR)) {
-    try {
-      zip.addLocalFile(join(UPLOAD_DIR, file), 'uploads')
-    } catch {
-      /* skip unreadable files */
+  // uploads (recursive — per-user uploads live under uploads/users/<id>/)
+  function addTree(baseDir, prefix) {
+    for (const entry of readdirSync(baseDir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue
+      const full = join(baseDir, entry.name)
+      const name = `${prefix}/${entry.name}`
+      if (entry.isDirectory()) addTree(full, name)
+      else {
+        try {
+          zip.addFile(name, readFileSync(full))
+        } catch {
+          /* skip unreadable files */
+        }
+      }
     }
   }
+  try {
+    addTree(UPLOAD_DIR, 'uploads')
+  } catch {
+    /* no uploads */
+  }
 
-  // plugin packages
+  // per-user plugin code + storage (DATA_DIR/users/**)
+  try {
+    const usersDir = join(DATA_DIR, 'users')
+    if (existsSync(usersDir)) addTree(usersDir, 'userdata/users')
+  } catch {
+    /* skip */
+  }
+
+  // legacy plugin packages (pre-multi-user layout), kept for compatibility
   function addPlugins(dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name)
@@ -100,13 +123,14 @@ router.post('/import', upload.single('file'), (req, res) => {
     return res.status(400).json({ error: '不是本软件的备份文件' })
   }
 
-  const { settings = {}, users = [], posts = [], moments = [], cards = [] } = backup.data
+  const { settings = {}, users = [], userSettings = [], posts = [], moments = [], cards = [] } = backup.data
 
   try {
     db.exec('BEGIN')
     db.exec('DELETE FROM moments')
     db.exec('DELETE FROM posts')
     db.exec('DELETE FROM cards')
+    db.exec('DELETE FROM user_settings')
     db.exec("DELETE FROM settings WHERE key != '_jwt_secret'")
     db.exec('DELETE FROM users')
 
@@ -116,8 +140,8 @@ router.post('/import', upload.single('file'), (req, res) => {
     }
 
     const insUser = db.prepare(
-      `INSERT INTO users (id, username, password_hash, display_name, email, avatar, bio, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO users (id, username, password_hash, display_name, email, avatar, bio, role, permissions, plugin_permissions, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const u of users) {
       insUser.run(
@@ -128,8 +152,19 @@ router.post('/import', upload.single('file'), (req, res) => {
         u.email || '',
         u.avatar || '',
         u.bio || '',
+        u.role || 'user',
+        typeof u.permissions === 'string' ? u.permissions : JSON.stringify(u.permissions || {}),
+        typeof u.plugin_permissions === 'string' ? u.plugin_permissions : JSON.stringify(u.plugin_permissions || []),
         u.created_at || new Date().toISOString()
       )
+    }
+
+    const insUserSetting = db.prepare(
+      'INSERT OR REPLACE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)'
+    )
+    for (const s of userSettings) {
+      if (s == null || s.user_id == null || !s.key) continue
+      insUserSetting.run(s.user_id, s.key, typeof s.value === 'string' ? s.value : JSON.stringify(s.value))
     }
 
     const insPost = db.prepare(
@@ -197,16 +232,46 @@ router.post('/import', upload.single('file'), (req, res) => {
     return res.status(500).json({ error: '导入失败：' + String(err.message || err) })
   }
 
-  // Restore uploaded files
+  // never leave the site without an admin (old backups may lack roles)
+  db.exec(
+    `UPDATE users SET role = 'admin'
+     WHERE id = (SELECT MIN(id) FROM users)
+       AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`
+  )
+  // merge legacy global settings into the owner (for older backups)
+  migrateLegacyUserData()
+
+  // Restore uploaded files (recursive — keeps uploads/users/<id>/…)
+  function safeJoin(base, rel) {
+    if (!rel || rel.includes('..')) return null
+    return join(base, rel)
+  }
   let files = 0
   for (const item of zip.getEntries()) {
     if (item.isDirectory) continue
     if (!item.entryName.startsWith('uploads/')) continue
-    const name = item.entryName.slice('uploads/'.length)
-    if (!name || name.includes('/') || name.includes('..')) continue
+    const target = safeJoin(UPLOAD_DIR, item.entryName.slice('uploads/'.length))
+    if (!target) continue
     try {
-      writeFileSync(join(UPLOAD_DIR, name), item.getData())
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, item.getData())
       files++
+    } catch {
+      /* skip */
+    }
+  }
+
+  // Restore per-user plugin code + storage (DATA_DIR/users/**)
+  let userDataFiles = 0
+  for (const item of zip.getEntries()) {
+    if (item.isDirectory) continue
+    if (!item.entryName.startsWith('userdata/')) continue
+    const target = safeJoin(DATA_DIR, item.entryName.slice('userdata/'.length))
+    if (!target) continue
+    try {
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, item.getData())
+      userDataFiles++
     } catch {
       /* skip */
     }
@@ -239,7 +304,9 @@ router.post('/import', upload.single('file'), (req, res) => {
       posts: posts.length,
       moments: moments.length,
       cards: cards.length,
+      userSettings: userSettings.length,
       files,
+      userDataFiles,
       plugins: pluginFiles,
     },
   })

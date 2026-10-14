@@ -2,8 +2,9 @@
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
 import { Router } from 'express'
-import { getSetting } from '../db.js'
+import { db, getUserSetting, primaryUserId } from '../db.js'
 import { getNintendoActivity } from '../nintendo.js'
+import { pageUsername } from '../scope.js'
 
 const router = Router()
 
@@ -179,8 +180,8 @@ async function steamActivity(cfg) {
   }
 }
 
-async function nintendoActivity(cfg) {
-  const live = await getNintendoActivity()
+async function nintendoActivity(cfg, userId) {
+  const live = await getNintendoActivity({ userId })
   const { friendCode, games } = cfg || {}
   const manualGames = Array.isArray(games) ? games : []
   const hasManual = Boolean(friendCode) || manualGames.length > 0
@@ -212,7 +213,17 @@ async function nintendoActivity(cfg) {
 }
 
 router.get('/', async (req, res) => {
-  const integrations = getSetting('integrations', {})
+  // activity is rendered for a specific user's homepage (defaults to the owner)
+  let targetId = primaryUserId()
+  const username = pageUsername(req)
+  if (username) {
+    const u = db.prepare('SELECT id FROM users WHERE username = ?').get(String(username))
+    if (u) targetId = u.id
+  } else if (req.query.userId) {
+    targetId = Number(req.query.userId)
+  }
+  const integrations = getUserSetting(targetId, 'integrations', {})
+
   const requested = String(req.query.providers || 'github,steam,nintendo')
     .split(',')
     .map((s) => s.trim())
@@ -223,7 +234,9 @@ router.get('/', async (req, res) => {
     requested.map(async (provider) => {
       if (provider === 'github') result.github = await githubActivity(integrations.github)
       else if (provider === 'steam') result.steam = await steamActivity(integrations.steam)
-      else if (provider === 'nintendo') result.nintendo = await nintendoActivity(integrations.nintendo)
+      else if (provider === 'nintendo') {
+        result.nintendo = await nintendoActivity(integrations.nintendo, targetId)
+      }
     })
   )
   res.json({ activity: result, fetchedAt: new Date().toISOString() })

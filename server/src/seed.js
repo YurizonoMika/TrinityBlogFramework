@@ -3,7 +3,7 @@
 
 import sharp from 'sharp'
 import { readFile } from 'node:fs/promises'
-import { join, basename } from 'node:path'
+import { join } from 'node:path'
 import { UPLOAD_DIR } from './db.js'
 
 function rgbToHsl(r, g, b) {
@@ -37,7 +37,15 @@ async function loadBuffer(source) {
     return Buffer.from(await res.arrayBuffer())
   }
   if (source.startsWith('/uploads/')) {
-    return readFile(join(UPLOAD_DIR, basename(source)))
+    const rel = source.slice('/uploads/'.length).split(/[?#]/)[0]
+    if (!rel || rel.includes('..')) throw new Error('invalid upload path')
+    let decoded = rel
+    try {
+      decoded = decodeURIComponent(rel)
+    } catch {
+      /* keep raw */
+    }
+    return readFile(join(UPLOAD_DIR, decoded))
   }
   return readFile(source)
 }

@@ -6,28 +6,23 @@ import { createRequire } from 'node:module'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { DATA_DIR, getSetting, setSetting } from './db.js'
+import {
+  DATA_DIR,
+  getSetting,
+  setSetting,
+  getUserSetting,
+  setUserSetting,
+  primaryUserId,
+} from './db.js'
 
 /*
- * nxapi selects a Coral "f" generation provider from its runtime config.
- *
- *  - The remote config (fancy.org.uk) now returns `coral: null`, which disables
- *    direct Coral authentication entirely.
- *  - The bundled config disables the third-party providers
- *    (`coral_auth.imink`/`flapg` = null) and always points at the official
- *    nxapi znca-api proxy.
- *
- * We therefore generate a small local config: it keeps Coral enabled, enables
- * the provider selected in the site settings, and syncs `znca_version` with
- * that provider's /config so the version we report to Nintendo matches the
- * version used to generate `f`.
- *
- * IMPORTANT: nxapi reads this config at module load, so changing the provider
- * requires a server restart (the `NXAPI_ZNCA_API` env is read dynamically, but
- * the `coral_auth` allow-list is not).
- *
- * Override with a custom config (advanced setting / NXAPI_CONFIG_URL), or set
- * "use remote config" to fall back to nxapi's own remote config.
+ * Multi-user Nintendo (NSO) support:
+ *  - The nxapi znca-proxy / provider configuration (URL, client id/secret,
+ *    provider, remote config) is SERVER-LEVEL (settings key `nintendo_server`,
+ *    edited by the admin) — nxapi reads it from process-wide env, so it cannot
+ *    be per-user.
+ *  - Each user binds their OWN Nintendo account (session token) and gets their
+ *    own Coral client + activity, stored per user.
  */
 
 const IMINK_CONFIG_URL = 'https://api.imink.app/config'
@@ -41,25 +36,93 @@ const AUTH_KEY = 'nintendo_auth'
 const PENDING_TTL = 15 * 60 * 1000
 
 let modulePromise = null
-let memoryCoral = null
-let activityCache = null
 let configPromise = null
 const CACHE_TTL = 2 * 60 * 1000
 
+const coralCache = new Map() // userId -> Coral client
+const activityCache = new Map() // userId -> { at, value }
+const pendingByUser = new Map() // userId -> Map<state, { verifier, createdAt }>
+
 let appliedEnvSignature = null
+
+// values provided by the environment (e.g. a .env file) act as a fallback so we
+// never wipe a working proxy credential with an empty settings value
+const BASE_ENV = {
+  url: process.env.ZNCA_API_URL || '',
+  id: process.env.NXAPI_ZNCA_API_CLIENT_ID || '',
+  secret: process.env.NXAPI_ZNCA_API_CLIENT_SECRET || '',
+  provider: process.env.NXAPI_ZNCA_API || '',
+}
 
 function setEnvVar(name, value) {
   if (value === undefined || value === null || value === '') delete process.env[name]
   else process.env[name] = value
 }
 
-/**
- * Apply the nxapi znca-API configuration from the site settings
- * (用户设置 → 活动集成 → Nintendo). Credentials are only read from the settings,
- * never from `.env`. Changing them invalidates cached config / Coral tokens.
- */
+/** One-time: carry the pre-multi-user global Nintendo binding to the admin. */
+function migrateLegacyAuth() {
+  const admin = primaryUserId()
+  if (admin == null) return
+  if (getUserSetting(admin, AUTH_KEY, null)) return
+  const legacy = getSetting(AUTH_KEY, null)
+  if (legacy && typeof legacy === 'object' && legacy.sessionToken) {
+    setUserSetting(admin, AUTH_KEY, legacy)
+  }
+}
+
+/** Server-level nxapi provider config (migrated from the admin's integration once). */
+function nintendoServerConfig() {
+  migrateLegacyAuth()
+  const admin = primaryUserId()
+  const n = admin ? (getUserSetting(admin, 'integrations', {}) || {}).nintendo || {} : {}
+  const fromIntegration = {
+    zncaApiUrl: n.zncaApiUrl || '',
+    clientId: n.clientId || '',
+    clientSecret: n.clientSecret || '',
+    provider: n.provider === 'imink' || n.provider === 'flapg' ? n.provider : '',
+    remoteConfig: n.remoteConfig === true,
+    configUrl: n.configUrl || '',
+  }
+
+  let cfg = getSetting('nintendo_server', null)
+  if (!cfg || typeof cfg !== 'object') {
+    cfg = fromIntegration
+    setSetting('nintendo_server', cfg)
+  } else {
+    // backfill any field that is still empty from the owner's integration
+    const next = { ...cfg }
+    let changed = false
+    for (const [key, value] of Object.entries(fromIntegration)) {
+      if ((next[key] === undefined || next[key] === '' || next[key] === false) && value !== '' && value !== false) {
+        next[key] = value
+        changed = true
+      }
+    }
+    if (changed) {
+      cfg = next
+      setSetting('nintendo_server', cfg)
+    }
+  }
+  return cfg
+}
+
+export function getNintendoServerConfig() {
+  return nintendoServerConfig()
+}
+
+export function setNintendoServerConfig(patch = {}) {
+  const next = { ...nintendoServerConfig() }
+  for (const key of ['zncaApiUrl', 'clientId', 'clientSecret', 'provider', 'configUrl']) {
+    if (patch[key] !== undefined) next[key] = String(patch[key] ?? '')
+  }
+  if (patch.remoteConfig !== undefined) next.remoteConfig = patch.remoteConfig === true
+  setSetting('nintendo_server', next)
+  resetNintendoConfig()
+  return next
+}
+
 function applyNxapiEnv() {
-  const nintendo = (getSetting('integrations', {}) || {}).nintendo || {}
+  const nintendo = nintendoServerConfig()
   const url = String(nintendo.zncaApiUrl || '').trim()
   const id = String(nintendo.clientId || '').trim()
   const secret = String(nintendo.clientSecret || '').trim()
@@ -68,46 +131,42 @@ function applyNxapiEnv() {
   const configUrl = String(nintendo.configUrl || '').trim()
   const remoteConfig = nintendo.remoteConfig === true
 
-  const signature = `${url}|${id}|${secret}|${provider}|${configUrl}|${remoteConfig}`
+  const effUrl = url || BASE_ENV.url
+  const effId = id || BASE_ENV.id
+  const effSecret = secret || BASE_ENV.secret
+  const effProvider = provider || BASE_ENV.provider
+
+  const signature = `${effUrl}|${effId}|${effSecret}|${effProvider}|${configUrl}|${remoteConfig}`
   if (signature === appliedEnvSignature) return
   appliedEnvSignature = signature
 
-  setEnvVar('ZNCA_API_URL', url)
-  setEnvVar('NXAPI_ZNCA_API_CLIENT_ID', id)
-  setEnvVar('NXAPI_ZNCA_API_CLIENT_SECRET', secret)
-  // explicit third-party provider (empty = auto: proxy if URL set, else imink)
-  setEnvVar('NXAPI_ZNCA_API', provider)
+  setEnvVar('ZNCA_API_URL', effUrl)
+  setEnvVar('NXAPI_ZNCA_API_CLIENT_ID', effId)
+  setEnvVar('NXAPI_ZNCA_API_CLIENT_SECRET', effSecret)
+  setEnvVar('NXAPI_ZNCA_API', effProvider)
 
   if (configUrl) {
-    // a custom nxapi config replaces the remote/bundled selection
     setEnvVar('NXAPI_CONFIG_URL', configUrl)
     delete process.env.NXAPI_ENABLE_REMOTE_CONFIG
   } else if (remoteConfig) {
-    // use nxapi's own remote config (disables Coral)
     delete process.env.NXAPI_CONFIG_URL
     setEnvVar('NXAPI_ENABLE_REMOTE_CONFIG', '1')
   } else {
-    // default: use our generated config (prepareConfig() sets NXAPI_CONFIG_URL).
-    // Leave NXAPI_ENABLE_REMOTE_CONFIG unset so nxapi loads it in "require"
-    // mode — setting it to '0' would disable remote config entirely and make
-    // nxapi ignore NXAPI_CONFIG_URL, falling back to the bundled config where
-    // imink/flapg are disabled.
     delete process.env.NXAPI_CONFIG_URL
     delete process.env.NXAPI_ENABLE_REMOTE_CONFIG
   }
 
-  // the local nxapi config depends on the provider URL → rebuild it
   configPromise = null
-  memoryCoral = null
-  activityCache = null
+  coralCache.clear()
+  activityCache.clear()
 }
 
 /** Force a full reload of nxapi config / Coral auth (e.g. after saving settings). */
 export function resetNintendoConfig() {
   appliedEnvSignature = null
   configPromise = null
-  memoryCoral = null
-  activityCache = null
+  coralCache.clear()
+  activityCache.clear()
 }
 
 function installedNxapiVersion() {
@@ -122,9 +181,8 @@ function installedNxapiVersion() {
   }
 }
 
-/** The provider selected in settings, or an automatic choice based on the URL. */
 function requestedProvider() {
-  const nintendo = (getSetting('integrations', {}) || {}).nintendo || {}
+  const nintendo = nintendoServerConfig()
   const explicit =
     nintendo.provider === 'imink' || nintendo.provider === 'flapg' ? nintendo.provider : ''
   const url = String(nintendo.zncaApiUrl || '').trim().replace(/\/+$/, '')
@@ -132,7 +190,6 @@ function requestedProvider() {
   return { provider: url ? ['nxapi', url] : 'imink', url }
 }
 
-/** `coral.znca_version` from nxapi's bundled config (providers without a /config). */
 function readBundledCoralVersion() {
   try {
     const require = createRequire(import.meta.url)
@@ -152,13 +209,10 @@ function readBundledCoralVersion() {
 
 async function readProviderConfig() {
   const { provider, url } = requestedProvider()
-
-  // flapg does not expose a /config endpoint; use the version nxapi ships with.
   if (provider === 'flapg') {
     const version = readBundledCoralVersion()
     return version ? { version, provider } : null
   }
-
   const configUrl = provider === 'imink' ? IMINK_CONFIG_URL : `${url}/config`
   try {
     const res = await fetch(configUrl, {
@@ -178,13 +232,9 @@ async function prepareConfig() {
   applyNxapiEnv()
   if (configPromise) return configPromise
   configPromise = (async () => {
-    if (process.env.NXAPI_CONFIG_URL || process.env.NXAPI_ENABLE_REMOTE_CONFIG === '1') {
-      return
-    }
-
+    if (process.env.NXAPI_CONFIG_URL || process.env.NXAPI_ENABLE_REMOTE_CONFIG === '1') return
     const nxapiVersion = installedNxapiVersion()
     const info = await readProviderConfig()
-
     if (info && nxapiVersion) {
       const config = {
         require_version: [nxapiVersion],
@@ -192,8 +242,6 @@ async function prepareConfig() {
         coral_auth: {
           default: info.provider,
           splatnet2statink: null,
-          // keep both third-party providers enabled so switching via the
-          // NXAPI_ZNCA_API env (read on each request) is not blocked
           flapg: info.provider === 'flapg' ? {} : null,
           imink: {},
         },
@@ -208,7 +256,6 @@ async function prepareConfig() {
       console.log(`[nintendo] nxapi config → ${label}, NSO ${info.version}, nxapi ${nxapiVersion}`)
       return
     }
-
     if (process.env.NXAPI_ENABLE_REMOTE_CONFIG === undefined) {
       process.env.NXAPI_ENABLE_REMOTE_CONFIG = '0'
       console.warn('[nintendo] provider config unavailable; using bundled nxapi config')
@@ -229,14 +276,7 @@ async function loadCoral() {
   return modulePromise
 }
 
-/*
- * nxapi reads its config once, at module load, so changing the provider/NSO
- * version normally requires a restart. We instead reach into the already-loaded
- * `remote-config` module (same module instance nxapi uses) and update the parts
- * that matter, so settings changes apply on the next request without restarting.
- */
 let remoteConfigModulePromise = null
-
 function loadRemoteConfigModule() {
   if (!remoteConfigModulePromise) {
     remoteConfigModulePromise = (async () => {
@@ -257,34 +297,31 @@ async function syncRuntimeConfig() {
   const mod = await loadRemoteConfigModule()
   const config = mod?.default
   if (!config?.coral || !config?.coral_auth) return
-
   const info = await readProviderConfig()
   const { provider } = requestedProvider()
   if (info) config.coral.znca_version = info.version
   config.coral_auth.default = provider
-  // keep both third-party providers available for live switching
   config.coral_auth.imink = {}
   config.coral_auth.flapg = {}
-  const label = Array.isArray(provider) ? `nxapi ${provider[1]}` : provider
-  console.log(`[nintendo] nxapi config → ${label}, NSO ${config.coral.znca_version}`)
 }
 
-function readAuth() {
-  return getSetting(AUTH_KEY, null) || {}
-}
+/* ---------------- per-user auth ---------------- */
 
-function writeAuth(patch) {
-  const next = { ...readAuth(), ...patch }
-  setSetting(AUTH_KEY, next)
+function readAuth(userId) {
+  return getUserSetting(userId, AUTH_KEY, null) || {}
+}
+function writeAuth(userId, patch) {
+  const next = { ...readAuth(userId), ...patch }
+  setUserSetting(userId, AUTH_KEY, next)
   return next
 }
 
-export function isLinked() {
-  return Boolean(readAuth().sessionToken)
+export function isLinked(userId) {
+  return Boolean(readAuth(userId).sessionToken)
 }
 
-export function authStatus() {
-  const auth = readAuth()
+export function authStatus(userId) {
+  const auth = readAuth(userId)
   return {
     linked: Boolean(auth.sessionToken),
     user: auth.user || null,
@@ -292,11 +329,7 @@ export function authStatus() {
   }
 }
 
-/* ---------------- authorisation ---------------- */
-
-const pending = new Map()
-
-export function createAuthoriseUrl() {
+export function createAuthoriseUrl(userId) {
   const state = crypto.randomBytes(36).toString('base64url')
   const verifier = crypto.randomBytes(32).toString('base64url')
   const challenge = crypto.createHash('sha256').update(verifier).digest().toString('base64url')
@@ -312,44 +345,43 @@ export function createAuthoriseUrl() {
     theme: 'login_form',
   })
 
+  let pending = pendingByUser.get(userId)
+  if (!pending) {
+    pending = new Map()
+    pendingByUser.set(userId, pending)
+  }
   const now = Date.now()
   for (const [key, value] of pending) {
     if (now - value.createdAt > PENDING_TTL) pending.delete(key)
   }
   pending.set(state, { verifier, createdAt: now })
-
   return { url: `${AUTHORIZE_URL}?${params.toString()}`, state }
 }
 
 export function parseRedirectInput(input) {
   const raw = String(input || '').trim()
   if (!raw) return { code: '', state: null }
-
   const hashIndex = raw.indexOf('#')
   const candidate = hashIndex >= 0 ? raw.slice(hashIndex + 1) : raw
-
   if (candidate.includes('session_token_code=') || candidate.includes('state=')) {
     const params = new URLSearchParams(candidate)
     return { code: params.get('session_token_code') || '', state: params.get('state') }
   }
-
   const match = raw.match(/session_token_code=([^&\s]+)/)
   if (match) {
     const stateMatch = raw.match(/state=([^&\s]+)/)
     return { code: match[1], state: stateMatch ? stateMatch[1] : null }
   }
-
   return { code: raw, state: null }
 }
 
-export async function exchangeCode(input) {
+export async function exchangeCode(userId, input) {
   const { code, state } = parseRedirectInput(input)
   if (!code) throw new Error('未能识别 session_token_code，请粘贴完整的重定向链接')
 
-  let entry = state ? pending.get(state) : null
-  if (!entry && pending.size === 1) {
-    entry = pending.values().next().value
-  }
+  const pending = pendingByUser.get(userId)
+  let entry = state && pending ? pending.get(state) : null
+  if (!entry && pending && pending.size === 1) entry = pending.values().next().value
   if (!entry) throw new Error('授权已过期，请重新点击「绑定 Nintendo 账户」')
 
   const res = await fetch(SESSION_TOKEN_URL, {
@@ -372,67 +404,65 @@ export async function exchangeCode(input) {
   }
   if (!data.session_token) throw new Error('任天堂未返回 session_token')
 
-  pending.clear()
-  memoryCoral = null
-  activityCache = null
-  writeAuth({ sessionToken: data.session_token, coral: null, coralExpiresAt: null, user: null })
+  pendingByUser.delete(userId)
+  coralCache.delete(userId)
+  activityCache.delete(userId)
+  writeAuth(userId, { sessionToken: data.session_token, coral: null, coralExpiresAt: null, user: null })
   return { linked: true }
 }
 
-export async function unlink() {
-  setSetting(AUTH_KEY, {})
-  memoryCoral = null
-  activityCache = null
+export async function unlink(userId) {
+  setUserSetting(userId, AUTH_KEY, {})
+  coralCache.delete(userId)
+  activityCache.delete(userId)
 }
 
-/** Clear in-memory auth/cache (e.g. after importing a backup). */
-export function resetCache() {
-  memoryCoral = null
-  activityCache = null
+/** Clear in-memory auth/cache for a user (e.g. after importing a backup). */
+export function resetCache(userId) {
+  coralCache.delete(userId)
+  activityCache.delete(userId)
 }
 
-/* ---------------- coral client ---------------- */
-
-async function getCoral() {
+async function getCoral(userId) {
   applyNxapiEnv()
-  const auth = readAuth()
+  const auth = readAuth(userId)
   if (!auth.sessionToken) return null
   const { CoralApi } = await loadCoral()
 
-  if (memoryCoral) return memoryCoral
+  const cached = coralCache.get(userId)
+  if (cached) return cached
 
   await syncRuntimeConfig()
 
+  let coral
   if (auth.coral && auth.coralExpiresAt && auth.coralExpiresAt > Date.now()) {
-    memoryCoral = CoralApi.createWithSavedToken(auth.coral)
+    coral = CoralApi.createWithSavedToken(auth.coral)
   } else {
     const { nso, data } = await CoralApi.createWithSessionToken(auth.sessionToken)
-    writeAuth({
+    writeAuth(userId, {
       coral: data,
       coralExpiresAt: Date.now() + (data.credential?.expiresIn || 7200) * 1000,
     })
-    memoryCoral = nso
+    coral = nso
   }
+  coralCache.set(userId, coral)
 
-  memoryCoral.onTokenExpired = async () => {
+  coral.onTokenExpired = async () => {
     try {
-      const partial = await memoryCoral.renewToken(auth.sessionToken, readAuth().coral?.user)
-      const merged = { ...readAuth().coral, ...partial }
-      writeAuth({
+      const partial = await coral.renewToken(auth.sessionToken, readAuth(userId).coral?.user)
+      const merged = { ...readAuth(userId).coral, ...partial }
+      writeAuth(userId, {
         coral: merged,
         coralExpiresAt: Date.now() + (partial.credential?.expiresIn || 7200) * 1000,
       })
       return partial
     } catch {
-      memoryCoral = null
+      coralCache.delete(userId)
       return null
     }
   }
-
-  return memoryCoral
+  return coral
 }
-
-/* ---------------- normalisation ---------------- */
 
 function normalizeGame(game) {
   if (!game || !game.name) return null
@@ -453,37 +483,30 @@ function friendlyError(err) {
   if (/incompatible_client/i.test(detail) || /incompatible_client|coral version/i.test(msg)) {
     return {
       message:
-        'nxapi 使用的 NSO 版本与所选服务不兼容。请在「活动集成」保存后稍等片刻（nxapi 会从服务方 /config 同步最新版本），再刷新重试。',
+        'nxapi 使用的 NSO 版本与所选服务不兼容。请管理员在「活动集成」保存后稍等片刻，再刷新重试。',
       code: 'update',
     }
   }
   if (/oauth-protected-resource|well-known|authorisation server|protected resource/i.test(msg)) {
     return {
-      message:
-        'nxapi 官方代理的客户端认证（OAuth 发现）接口暂时不可用（HTTP 503），与你的配置无关。请稍后重试，或先切换为 imink。',
+      message: 'nxapi 官方代理的客户端认证（OAuth 发现）接口暂时不可用（HTTP 503），请稍后重试，或先切换为 imink。',
       code: 'fgen',
     }
   }
   if (/prevents imink|prevents flapg/i.test(msg)) {
-    return {
-      message: '当前 nxapi 配置禁用了所选的 f 参数生成服务，请在「活动集成」选择可用的提供商并重启服务后重试',
-      code: 'fgen',
-    }
+    return { message: '当前 nxapi 配置禁用了所选的 f 参数生成服务，请管理员在「活动集成」选择可用的提供商后重试', code: 'fgen' }
   }
   if (/Missing request authorisation|unauthori[sz]ed|missing.*client|\b401\b/i.test(msg)) {
     return {
       message:
-        'nxapi 代理需要客户端身份。请在 https://nxapi-auth.fancy.org.uk/oauth/clients 注册（scope: ca:gf ca:er ca:dr），' +
-        '并在「用户设置 → 活动集成 → Nintendo」填入 client id/secret。',
+        'nxapi 代理需要客户端身份。请管理员在「用户设置 → 活动集成 → Nintendo」填入注册的 client id/secret。',
       code: 'clientsetup',
     }
   }
   if (/\[imink\]|\[flapg\]|\[znca-api\]|znca api|client authentication|status code 503/i.test(msg)) {
     return {
       message:
-        'f 参数生成服务拒绝了请求' +
-        (detail ? `（${detail}）` : '') +
-        '。请在「用户设置 → 活动集成 → Nintendo」确认代理地址 / Client ID / f 参数生成方式，保存后稍候重试。',
+        'f 参数生成服务拒绝了请求' + (detail ? `（${detail}）` : '') + '。请管理员确认代理地址 / Client ID / f 参数生成方式。',
       code: 'fgen',
     }
   }
@@ -496,15 +519,14 @@ function friendlyError(err) {
   return { message: msg, code: 'error' }
 }
 
-export async function getNintendoActivity({ force = false } = {}) {
-  if (!isLinked()) return { configured: false }
+export async function getNintendoActivity({ force = false, userId = primaryUserId() } = {}) {
+  if (!isLinked(userId)) return { configured: false }
 
-  if (!force && activityCache && Date.now() - activityCache.at < CACHE_TTL) {
-    return activityCache.value
-  }
+  const cached = activityCache.get(userId)
+  if (!force && cached && Date.now() - cached.at < CACHE_TTL) return cached.value
 
   try {
-    const coral = await getCoral()
+    const coral = await getCoral(userId)
     const me = (await coral.getCurrentUser()).result
 
     const user = {
@@ -515,7 +537,6 @@ export async function getNintendoActivity({ force = false } = {}) {
       membershipActive: Boolean(me.links?.nintendoAccount?.membership?.active),
     }
 
-    // Recently played games (ordered most-recent first by the Coral API)
     let recentGames = []
     try {
       const log = (await coral.getPlayLog(me.nsaId)).result || []
@@ -524,8 +545,6 @@ export async function getNintendoActivity({ force = false } = {}) {
       recentGames = []
     }
     const recent = recentGames[0] || null
-
-    // "Currently playing": own presence is normally not exposed by the API.
     const ownGame = normalizeGame(me.presence?.game)
     const nowPlaying = ownGame ? { source: 'self', game: ownGame, user: user.name } : null
 
@@ -539,9 +558,8 @@ export async function getNintendoActivity({ force = false } = {}) {
       recentGames: recentGames.slice(0, 20),
       nowPlaying,
     }
-
-    activityCache = { at: Date.now(), value }
-    writeAuth({ user })
+    activityCache.set(userId, { at: Date.now(), value })
+    writeAuth(userId, { user })
     return value
   } catch (err) {
     console.warn(
@@ -551,14 +569,14 @@ export async function getNintendoActivity({ force = false } = {}) {
       err?.response?.status ? `status=${err.response.status}` : '',
     )
     const { message, code } = friendlyError(err)
-    if (code === 'reauth') memoryCoral = null
+    if (code === 'reauth') coralCache.delete(userId)
     return {
       configured: true,
       ok: false,
       linked: true,
       error: message,
       errorCode: code,
-      user: readAuth().user || null,
+      user: readAuth(userId).user || null,
     }
   }
 }

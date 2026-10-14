@@ -3,11 +3,18 @@
 
 import { Router } from 'express'
 import { db } from '../db.js'
-import { requireAuth } from '../auth.js'
+import { requireAuth, can } from '../auth.js'
+import { pageUsername } from '../scope.js'
 
 const router = Router()
 const MAX_LEN = 200
 const MAX_IMAGES = 4
+
+function ownsOrAdmin(user, row) {
+  if (!user) return false
+  if (user.role === 'admin') return true
+  return row.author_id != null && row.author_id === user.id
+}
 
 function parseMoment(row) {
   if (!row) return null
@@ -27,13 +34,31 @@ function safeImages(images) {
 
 router.get('/', (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 200)
-  const rows = db
-    .prepare('SELECT * FROM moments ORDER BY datetime(created_at) DESC, id DESC LIMIT ?')
-    .all(limit)
+  const username = (pageUsername(req) || '').trim()
+  const authorId = req.query.author_id ? Number(req.query.author_id) : null
+  let author = null
+  if (username) {
+    const u = db.prepare('SELECT id FROM users WHERE username = ?').get(username)
+    if (!u) return res.json({ moments: [] })
+    author = u.id
+  } else if (authorId) {
+    author = authorId
+  }
+  const rows =
+    author != null
+      ? db
+          .prepare(
+            'SELECT * FROM moments WHERE author_id = ? ORDER BY datetime(created_at) DESC, id DESC LIMIT ?'
+          )
+          .all(author, limit)
+      : db
+          .prepare('SELECT * FROM moments ORDER BY datetime(created_at) DESC, id DESC LIMIT ?')
+          .all(limit)
   res.json({ moments: rows.map(parseMoment) })
 })
 
 router.post('/', requireAuth, (req, res) => {
+  if (!can(req.user, 'moment')) return res.status(403).json({ error: '你没有发动态权限' })
   const content = String(req.body?.content || '').trim()
   const images = safeImages(req.body?.images)
   if (!content && !images.length) {
@@ -52,6 +77,7 @@ router.post('/', requireAuth, (req, res) => {
 router.put('/:id', requireAuth, (req, res) => {
   const existing = db.prepare('SELECT * FROM moments WHERE id = ?').get(req.params.id)
   if (!existing) return res.status(404).json({ error: '动态不存在' })
+  if (!ownsOrAdmin(req.user, existing)) return res.status(403).json({ error: '无权修改该动态' })
 
   const content = req.body?.content !== undefined ? String(req.body.content).trim() : existing.content
   const images = req.body?.images !== undefined ? safeImages(req.body.images) : parseMoment(existing).images
@@ -71,8 +97,10 @@ router.put('/:id', requireAuth, (req, res) => {
 })
 
 router.delete('/:id', requireAuth, (req, res) => {
-  const info = db.prepare('DELETE FROM moments WHERE id = ?').run(req.params.id)
-  if (!info.changes) return res.status(404).json({ error: '动态不存在' })
+  const existing = db.prepare('SELECT * FROM moments WHERE id = ?').get(req.params.id)
+  if (!existing) return res.status(404).json({ error: '动态不存在' })
+  if (!ownsOrAdmin(req.user, existing)) return res.status(403).json({ error: '无权删除该动态' })
+  db.prepare('DELETE FROM moments WHERE id = ?').run(req.params.id)
   res.json({ ok: true })
 })
 

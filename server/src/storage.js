@@ -2,16 +2,10 @@
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
 import { statfsSync, readdirSync, statSync, existsSync, rmSync } from 'node:fs'
-import { join, dirname, basename } from 'node:path'
+import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DATA_DIR, UPLOAD_DIR, db, getSetting } from './db.js'
-import {
-  PLUGINS_DIR,
-  PLUGIN_DATA_DIR,
-  listPlugins,
-  pluginStorageDir,
-  listPluginStorage,
-} from './plugins.js'
+import { DATA_DIR, UPLOAD_DIR, db, getSetting, primaryUserId } from './db.js'
+import { listPlugins, pluginStorageDir, listPluginStorage } from './plugins.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SERVER_DIR = join(__dirname, '..')
@@ -19,6 +13,7 @@ const APP_DIR = join(SERVER_DIR, '..')
 const WEB_DIST = join(APP_DIR, 'web', 'dist')
 const NODE_MODULES = join(APP_DIR, 'node_modules')
 const DB_FILE = join(DATA_DIR, 'homepage.db')
+const USER_DIR = join(DATA_DIR, 'users') // per-user data (plugin code + storage)
 
 function diskUsage(path) {
   try {
@@ -31,7 +26,6 @@ function diskUsage(path) {
   }
 }
 
-/** Recursively sum file sizes; optionally skip a sub-path. */
 function dirSize(dir, skip) {
   if (!existsSync(dir)) return 0
   let total = 0
@@ -75,72 +69,83 @@ function safeJsonArray(value) {
   }
 }
 
-/** Extract a filename from any `/uploads/<name>` reference (relative or absolute URL). */
-function uploadName(ref) {
+/** Relative path (from `/uploads/`) of a `/uploads/...` reference. */
+function uploadRefPath(ref) {
   const m = String(ref || '').match(/\/uploads\/([^"')\s>?#]+)/)
   if (!m) return null
-  let name = m[1]
+  let p = m[1]
   try {
-    name = decodeURIComponent(name)
+    p = decodeURIComponent(p)
   } catch {
     /* keep raw */
   }
-  return basename(name)
+  return p.replace(/^\.\//, '')
 }
 
 function scanUploadNames(text, out) {
   const re = /\/uploads\/[^"')\s>?#]+/g
   let m
   while ((m = re.exec(String(text || '')))) {
-    const name = uploadName(m[0])
-    if (name) out.add(name)
+    const p = uploadRefPath(m[0])
+    if (p) out.add(p)
   }
 }
 
-/** Which upload files are referenced by posts / moments / site assets. */
 function collectReferences() {
   const posts = new Set()
   const moments = new Set()
   const site = new Set()
 
   for (const row of db.prepare('SELECT cover, content FROM posts').all()) {
-    const n1 = uploadName(row.cover)
-    if (n1) posts.add(n1)
+    const n = uploadRefPath(row.cover)
+    if (n) posts.add(n)
     scanUploadNames(row.content, posts)
   }
   for (const row of db.prepare('SELECT content, images FROM moments').all()) {
     for (const url of safeJsonArray(row.images)) {
-      const n = uploadName(url)
+      const n = uploadRefPath(url)
       if (n) moments.add(n)
     }
     scanUploadNames(row.content, moments)
   }
-
   const siteSettings = getSetting('site', {}) || {}
   for (const key of ['icon', 'banner']) {
-    const n = uploadName(siteSettings[key])
+    const n = uploadRefPath(siteSettings[key])
     if (n) site.add(n)
   }
   for (const row of db.prepare('SELECT avatar FROM users').all()) {
-    const n = uploadName(row.avatar)
+    const n = uploadRefPath(row.avatar)
     if (n) site.add(n)
   }
-
   return { posts, moments, site }
 }
 
 function listUploadFiles() {
-  if (!existsSync(UPLOAD_DIR)) return []
-  return readdirSync(UPLOAD_DIR, { withFileTypes: true })
-    .filter((e) => e.isFile() && !e.name.startsWith('.'))
-    .map((e) => ({ name: e.name, size: fileSize(join(UPLOAD_DIR, e.name)) }))
+  const out = []
+  const walk = (dir, prefix) => {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const p = join(dir, entry.name)
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isDirectory()) walk(p, rel)
+      else if (entry.isFile()) out.push({ path: rel, size: fileSize(p) })
+    }
+  }
+  walk(UPLOAD_DIR, '')
+  return out
 }
 
-function sumByName(files, names) {
+function sumByPath(files, names) {
   let bytes = 0
   let count = 0
   for (const f of files) {
-    if (names.has(f.name)) {
+    if (names.has(f.path)) {
       bytes += f.size
       count++
     }
@@ -148,14 +153,31 @@ function sumByName(files, names) {
   return { bytes, count }
 }
 
-export function getStorageOverview() {
+/** Per-user plugin code+storage bytes, and the full plugin list. */
+function pluginUsage(usersRows) {
+  const per = new Map()
+  const list = []
+  for (const u of usersRows) {
+    for (const p of listPlugins(u.id)) {
+      const files = listPluginStorage(u.id, p.id)
+      const bytes = files.reduce((s, f) => s + (f.size || 0), 0)
+      if (bytes) {
+        list.push({ id: p.id, name: p.name, owner: u.username, bytes, files: files.length, enabled: p.enabled })
+        per.set(u.id, (per.get(u.id) || 0) + bytes)
+      }
+    }
+  }
+  list.sort((a, b) => b.bytes - a.bytes)
+  return { per, list }
+}
+
+export function getStorageOverview(opts = {}) {
+  const { userId = null, isAdmin = true } = opts
   const refs = collectReferences()
   const uploads = listUploadFiles()
 
-  const posts = sumByName(uploads, refs.posts)
-  const moments = sumByName(uploads, refs.moments)
-  // everything not used by posts/moments belongs to the site system
-  // (site icon/banner/avatar + orphaned files)
+  const posts = sumByPath(uploads, refs.posts)
+  const moments = sumByPath(uploads, refs.moments)
   const contentRefs = new Set([...refs.posts, ...refs.moments])
   let systemUploadBytes = 0
   let orphanBytes = 0
@@ -163,46 +185,66 @@ export function getStorageOverview() {
   let totalUploadBytes = 0
   for (const f of uploads) {
     totalUploadBytes += f.size
-    if (contentRefs.has(f.name)) continue
+    if (contentRefs.has(f.path)) continue
     systemUploadBytes += f.size
-    if (!refs.site.has(f.name)) {
+    if (!refs.site.has(f.path)) {
       orphanBytes += f.size
       orphanCount++
     }
   }
-  const referencedUploadBytes = totalUploadBytes - systemUploadBytes
 
   const dbBytes = fileSize(DB_FILE) + fileSize(DB_FILE + '-wal') + fileSize(DB_FILE + '-shm')
-  const pluginsDataBytes = dirSize(PLUGIN_DATA_DIR)
-  const configBytes = Math.max(0, dirSize(DATA_DIR, PLUGIN_DATA_DIR) - dbBytes)
 
-  const plugins = listPlugins().map((p) => {
-    const files = listPluginStorage(p.id)
-    return {
-      id: p.id,
-      name: p.name,
-      enabled: p.enabled,
-      bytes: files.reduce((s, f) => s + f.size, 0),
-      files: files.length,
-    }
-  })
-  plugins.sort((a, b) => b.bytes - a.bytes)
+  const usersRows = db.prepare('SELECT id, username, display_name, role FROM users ORDER BY id ASC').all()
+  const { per: pluginByUser, list: plugins } = pluginUsage(usersRows)
+
+  const pluginsDataBytes = dirSize(USER_DIR)
+  const configBytes = Math.max(0, dirSize(DATA_DIR, USER_DIR) - dbBytes)
 
   const parts = [
     { id: 'database', label: '数据库', bytes: dbBytes },
     { id: 'uploads', label: '上传文件', bytes: totalUploadBytes },
-    { id: 'plugins', label: '插件数据', bytes: pluginsDataBytes },
-    { id: 'plugin-code', label: '插件代码', bytes: dirSize(PLUGINS_DIR) },
+    { id: 'user-data', label: '用户数据与插件', bytes: pluginsDataBytes },
     { id: 'dist', label: '前端构建', bytes: dirSize(WEB_DIST) },
     { id: 'server', label: '服务端代码', bytes: dirSize(SERVER_DIR, join(SERVER_DIR, 'node_modules')) },
     { id: 'deps', label: '依赖 (node_modules)', bytes: dirSize(NODE_MODULES) },
   ]
   const siteBytes = parts.reduce((s, p) => s + p.bytes, 0)
 
-  return {
+  // per-user attribution: uploads under `users/<id>/...` (+ legacy flat -> owner) and plugin data
+  const ownerId = primaryUserId()
+  const perUser = new Map()
+  for (const f of uploads) {
+    const m = f.path.match(/^users\/(\d+)\//)
+    const owner = m ? Number(m[1]) : ownerId
+    perUser.set(owner, (perUser.get(owner) || 0) + f.size)
+  }
+  for (const [id, bytes] of pluginByUser) perUser.set(id, (perUser.get(id) || 0) + bytes)
+  const users = usersRows.map((u) => ({ id: u.id, username: u.username, name: u.display_name || u.username, role: u.role, bytes: perUser.get(u.id) || 0 }))
+
+  const base = {
     disk: diskUsage(APP_DIR),
     site: { bytes: siteBytes, parts },
-    uploads: { total: totalUploadBytes, referenced: referencedUploadBytes, orphan: orphanBytes, orphanCount },
+    uploads: { total: totalUploadBytes, referenced: totalUploadBytes - systemUploadBytes, orphan: orphanBytes, orphanCount },
+  }
+
+  if (!isAdmin) {
+    const own = users.find((u) => u.id === userId)
+    const others = users.filter((u) => u.id !== userId).reduce((s, u) => s + u.bytes, 0)
+    return {
+      ...base,
+      limited: true,
+      own: own ? { id: own.id, name: own.name, bytes: own.bytes } : { id: userId, name: '', bytes: 0 },
+      others,
+      users: [],
+      categories: null,
+    }
+  }
+
+  return {
+    ...base,
+    limited: false,
+    users,
     categories: {
       posts: { bytes: posts.bytes, files: posts.count },
       moments: { bytes: moments.bytes, files: moments.count },
@@ -212,16 +254,15 @@ export function getStorageOverview() {
   }
 }
 
-/** Delete upload files referenced by nothing (removes orphans only; content is untouched). */
 export function cleanOrphanUploads() {
   const refs = collectReferences()
   const referenced = new Set([...refs.posts, ...refs.moments, ...refs.site])
   let removed = 0
   let bytes = 0
   for (const f of listUploadFiles()) {
-    if (referenced.has(f.name)) continue
+    if (referenced.has(f.path)) continue
     try {
-      rmSync(join(UPLOAD_DIR, f.name), { force: true })
+      rmSync(join(UPLOAD_DIR, f.path), { force: true })
       removed++
       bytes += f.size
     } catch {
@@ -231,9 +272,8 @@ export function cleanOrphanUploads() {
   return { removed, bytes }
 }
 
-/** Remove every file stored by a plugin. */
-export function clearPluginStorage(id) {
-  const dir = pluginStorageDir(id) // validates the id
+export function clearPluginStorage(userId, id) {
+  const dir = pluginStorageDir(userId, id)
   let removed = 0
   let bytes = 0
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -250,7 +290,6 @@ export function clearPluginStorage(id) {
   return { removed, bytes }
 }
 
-/** Reclaim space in the SQLite database. */
 export function vacuumDatabase() {
   const before = fileSize(DB_FILE)
   try {

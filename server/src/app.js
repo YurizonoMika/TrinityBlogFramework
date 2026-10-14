@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs'
 import { UPLOAD_DIR } from './db.js'
 import setupRoutes from './routes/setup.js'
 import authRoutes from './routes/auth.js'
+import userRoutes from './routes/users.js'
 import postRoutes from './routes/posts.js'
 import momentRoutes from './routes/moments.js'
 import settingsRoutes from './routes/settings.js'
@@ -33,6 +34,7 @@ export function createApp() {
 
   app.use('/api/setup', setupRoutes)
   app.use('/api/auth', authRoutes)
+  app.use('/api/users', userRoutes)
   app.use('/api/posts', postRoutes)
   app.use('/api/moments', momentRoutes)
   app.use('/api/settings', settingsRoutes)

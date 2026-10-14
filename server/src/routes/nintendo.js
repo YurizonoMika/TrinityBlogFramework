@@ -16,37 +16,37 @@ const router = Router()
 router.use(requireAuth)
 
 router.get('/status', (req, res) => {
-  res.json(authStatus())
+  res.json(authStatus(req.user.id))
 })
 
 router.post('/auth/start', (req, res) => {
-  res.json(createAuthoriseUrl())
+  res.json(createAuthoriseUrl(req.user.id))
 })
 
 router.post('/auth/exchange', async (req, res) => {
   const input = req.body?.input || req.body?.code || ''
   try {
-    await exchangeCode(input)
+    await exchangeCode(req.user.id, input)
   } catch (err) {
     return res.status(400).json({ error: String(err.message || err) })
   }
 
   let activity = null
   try {
-    activity = await getNintendoActivity({ force: true })
+    activity = await getNintendoActivity({ force: true, userId: req.user.id })
   } catch {
     /* linked but not reachable */
   }
-  res.json({ status: authStatus(), activity })
+  res.json({ status: authStatus(req.user.id), activity })
 })
 
 router.post('/refresh', async (req, res) => {
-  const activity = await getNintendoActivity({ force: true })
+  const activity = await getNintendoActivity({ force: true, userId: req.user.id })
   res.json({ activity })
 })
 
 router.delete('/', async (req, res) => {
-  await unlink()
+  await unlink(req.user.id)
   res.json({ ok: true })
 })
 

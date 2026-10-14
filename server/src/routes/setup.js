@@ -25,14 +25,14 @@ router.post('/', (req, res) => {
 
   const info = db
     .prepare(
-      `INSERT INTO users (username, password_hash, display_name)
-       VALUES (?, ?, ?)`
+      `INSERT INTO users (username, password_hash, display_name, role, permissions)
+       VALUES (?, ?, ?, 'admin', ?)`
     )
-    .run(username, hashPassword(password), displayName || username)
+    .run(username, hashPassword(password), displayName || username, JSON.stringify({ post: true, moment: true, plugins: true }))
 
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid)
 
-  seedDefaultCards()
+  seedDefaultCards(user.id)
   setSetting('site', {
     title: '我的主页',
     subtitle: '欢迎来到我的小站',

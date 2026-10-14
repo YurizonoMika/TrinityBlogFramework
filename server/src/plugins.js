@@ -11,31 +11,60 @@ import {
   mkdirSync,
   rmSync,
   statSync,
+  cpSync,
 } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getSetting, setSetting, db, DATA_DIR } from './db.js'
+import {
+  getSetting,
+  setSetting,
+  getUserSetting,
+  setUserSetting,
+  db,
+  DATA_DIR,
+  primaryUserId,
+} from './db.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 export const PLUGINS_DIR = process.env.HOMEPAGE_PLUGINS_DIR || join(__dirname, '..', 'plugins')
-export const PLUGIN_DATA_DIR = join(DATA_DIR, 'plugins')
+// per-user plugin code + storage: DATA_DIR/users/<userId>/plugins/<pluginId>/
+const USERS_DIR = join(DATA_DIR, 'users')
 
 mkdirSync(PLUGINS_DIR, { recursive: true })
-mkdirSync(PLUGIN_DATA_DIR, { recursive: true })
+mkdirSync(USERS_DIR, { recursive: true })
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/
-const STATE_KEY = 'plugins'
 const SCRIPT_TIMEOUT = 1500
 
-// in-memory runtime registry: id -> { manifest, dir, registrations }
+// in-memory runtime registry: `${userId}:${id}` -> { manifest, dir, registrations }
 const runtime = new Map()
 
-export function pluginDir(id) {
-  return join(PLUGINS_DIR, id)
+function userPluginsRoot(userId) {
+  return join(USERS_DIR, String(userId), 'plugins')
+}
+export function pluginDir(userId, id) {
+  return join(userPluginsRoot(userId), id)
+}
+function usernameOf(userId) {
+  const u = db.prepare('SELECT username FROM users WHERE id = ?').get(userId)
+  return u ? u.username : ''
 }
 
 /* ------------------------------------------------------------------ */
-/* plugin storage (generic, reusable)                                  */
+/* per-plugin state (stored in the user's settings)                    */
+/* ------------------------------------------------------------------ */
+
+export function getPluginStates(userId) {
+  return getUserSetting(userId, 'plugins', {}) || {}
+}
+
+function setPluginStates(userId, states) {
+  setUserSetting(userId, 'plugins', states)
+  invalidatePluginCache(userId)
+}
+
+/* ------------------------------------------------------------------ */
+/* plugin storage (per user + plugin)                                  */
 /* ------------------------------------------------------------------ */
 
 function safeName(name) {
@@ -46,15 +75,15 @@ function safeName(name) {
   return n
 }
 
-export function pluginStorageDir(id) {
+export function pluginStorageDir(userId, id) {
   if (!ID_RE.test(id)) throw new Error('无效的插件 id')
-  const dir = join(PLUGIN_DATA_DIR, id)
+  const dir = join(pluginDir(userId, id), 'storage')
   mkdirSync(dir, { recursive: true })
   return dir
 }
 
-export function listPluginStorage(id) {
-  const dir = pluginStorageDir(id)
+export function listPluginStorage(userId, id) {
+  const dir = pluginStorageDir(userId, id)
   return readdirSync(dir)
     .filter((n) => !n.startsWith('.'))
     .map((name) => {
@@ -64,21 +93,21 @@ export function listPluginStorage(id) {
     .sort((a, b) => b.mtime - a.mtime)
 }
 
-export function pluginStorageStats(id) {
-  const files = listPluginStorage(id)
+export function pluginStorageStats(userId, id) {
+  const files = listPluginStorage(userId, id)
   return { count: files.length, bytes: files.reduce((s, f) => s + f.size, 0) }
 }
 
-export function savePluginStorageFile(id, name, buffer) {
-  writeFileSync(join(pluginStorageDir(id), safeName(name)), buffer)
+export function savePluginStorageFile(userId, id, name, buffer) {
+  writeFileSync(join(pluginStorageDir(userId, id), safeName(name)), buffer)
 }
 
-export function deletePluginStorageFile(id, name) {
-  rmSync(join(pluginStorageDir(id), safeName(name)), { force: true })
+export function deletePluginStorageFile(userId, id, name) {
+  rmSync(join(pluginStorageDir(userId, id), safeName(name)), { force: true })
 }
 
-export function deletePluginStorageBefore(id, beforeMs) {
-  const dir = pluginStorageDir(id)
+export function deletePluginStorageBefore(userId, id, beforeMs) {
+  const dir = pluginStorageDir(userId, id)
   let removed = 0
   for (const f of readdirSync(dir)) {
     const p = join(dir, f)
@@ -90,13 +119,13 @@ export function deletePluginStorageBefore(id, beforeMs) {
   return removed
 }
 
-export function pluginStoragePath(id, name) {
-  const p = join(pluginStorageDir(id), safeName(name))
+export function pluginStoragePath(userId, id, name) {
+  const p = join(pluginStorageDir(userId, id), safeName(name))
   return existsSync(p) ? p : null
 }
 
-function readManifest(id) {
-  const file = join(pluginDir(id), 'plugin.json')
+function readManifest(dir) {
+  const file = join(dir, 'plugin.json')
   if (!existsSync(file)) return null
   try {
     return JSON.parse(readFileSync(file, 'utf-8'))
@@ -105,32 +134,30 @@ function readManifest(id) {
   }
 }
 
-/*
- * Per-plugin metadata (revision token + hasUi/hasJs) is cached and keyed on the
- * plugin directory's mtime, so listing plugins / building the runtime manifest
- * no longer re-reads the whole directory on every request. Re-importing a plugin
- * recreates its directory (new mtime), so the cache refreshes automatically;
- * admin actions additionally invalidate it.
- */
-const pluginMetaCache = new Map() // id -> { dirMtime, rev, hasUi, hasJs }
-const runtimeManifestCache = { visitor: null, at: 0, value: null }
+const pluginMetaCache = new Map() // `${userId}:${id}` -> { dirMtime, rev, hasUi, hasJs }
+const runtimeManifestCache = new Map() // `${userId}:${visitor}` -> { at, value }
 const RUNTIME_MANIFEST_TTL = 2000
 
-function invalidatePluginCache(id) {
-  if (id) pluginMetaCache.delete(id)
-  else pluginMetaCache.clear()
-  runtimeManifestCache.value = null
+function invalidatePluginCache(userId, id) {
+  const prefix = userId == null ? null : `${userId}:`
+  for (const key of [...pluginMetaCache.keys()]) {
+    if (!prefix || key.startsWith(prefix)) pluginMetaCache.delete(key)
+  }
+  for (const key of [...runtimeManifestCache.keys()]) {
+    if (!prefix || key.startsWith(prefix)) runtimeManifestCache.delete(key)
+  }
 }
 
-function pluginMeta(id) {
-  const dir = pluginDir(id)
+function pluginMeta(userId, id) {
+  const dir = pluginDir(userId, id)
   let dirMtime = 0
   try {
     dirMtime = statSync(dir).mtimeMs
   } catch {
     return { rev: '0', hasUi: false, hasJs: false }
   }
-  const cached = pluginMetaCache.get(id)
+  const key = `${userId}:${id}`
+  const cached = pluginMetaCache.get(key)
   if (cached && cached.dirMtime === dirMtime) return cached
 
   let rev = '0'
@@ -146,35 +173,31 @@ function pluginMeta(id) {
     }
     rev = String(Math.round(max))
   } catch {
-    /* keep defaults */
+    /* defaults */
   }
   const meta = { dirMtime, rev, hasUi, hasJs }
-  pluginMetaCache.set(id, meta)
+  pluginMetaCache.set(key, meta)
   return meta
 }
 
-export function getPluginStates() {
-  return getSetting(STATE_KEY, {}) || {}
-}
+/* ------------------------------------------------------------------ */
+/* listing / import / delete / state                                   */
+/* ------------------------------------------------------------------ */
 
-function setPluginStates(states) {
-  setSetting(STATE_KEY, states)
-  invalidatePluginCache()
-}
-
-export function listPlugins() {
-  const states = getPluginStates()
-  const ids = existsSync(PLUGINS_DIR)
-    ? readdirSync(PLUGINS_DIR).filter((d) => existsSync(join(PLUGINS_DIR, d, 'plugin.json')))
+export function listPlugins(userId) {
+  const states = getPluginStates(userId)
+  const root = userPluginsRoot(userId)
+  const ids = existsSync(root)
+    ? readdirSync(root).filter((d) => existsSync(join(root, d, 'plugin.json')))
     : []
   return ids.map((id) => {
-    const manifest = readManifest(id) || { id, name: id }
+    const manifest = readManifest(pluginDir(userId, id)) || { id, name: id }
     const state = states[id] || {}
-    const dir = pluginDir(id)
-    const reg = runtime.get(id)?.registrations
-    const meta = pluginMeta(id)
+    const reg = runtime.get(`${userId}:${id}`)?.registrations
+    const meta = pluginMeta(userId, id)
     return {
       id,
+      owner: usernameOf(userId),
       name: manifest.name || id,
       version: manifest.version || '0.0.0',
       description: manifest.description || '',
@@ -183,16 +206,15 @@ export function listPlugins() {
       requestedPermissions: manifest.permissions || [],
       hasUi: meta.hasUi,
       hasJs: meta.hasJs,
-      hasSources: existsSync(join(dir, 'sources')),
-      hasApp: existsSync(join(dir, 'app.js')),
+      hasSources: existsSync(join(pluginDir(userId, id), 'sources')),
+      hasApp: existsSync(join(pluginDir(userId, id), 'app.js')),
       rev: meta.rev,
-      enabled: state.enabled !== false && state.enabled !== undefined ? state.enabled : false,
+      enabled: state.enabled === undefined ? false : Boolean(state.enabled),
       visitor: Boolean(state.visitor),
       permissions: Array.isArray(state.permissions) ? state.permissions : [],
-      token: (getSetting('plugin_tokens', {}) || {})[id] || '',
-      loaded: runtime.has(id),
+      token: (getUserSetting(userId, 'plugin_tokens', {}) || {})[id] || '',
+      loaded: runtime.has(`${userId}:${id}`),
       error: state.error || null,
-      // contributions (available once loaded)
       widgets: reg?.widgets || [],
       pages: reg?.pages || [],
       postModules: reg?.postModules || [],
@@ -204,21 +226,17 @@ export function listPlugins() {
   })
 }
 
-export function importPlugin(buffer) {
+export function importPlugin(userId, buffer) {
   let zip
   try {
     zip = new AdmZip(buffer)
   } catch {
     throw new Error('无效的 zip 文件')
   }
-
-  // Accept either plugin.json at the root, or inside a single top-level folder.
   let rootPrefix = ''
   let entry = zip.getEntry('plugin.json')
   if (!entry) {
-    const candidates = zip
-      .getEntries()
-      .filter((e) => !e.isDirectory && /^[^/]+\/plugin\.json$/.test(e.entryName))
+    const candidates = zip.getEntries().filter((e) => !e.isDirectory && /^[^/]+\/plugin\.json$/.test(e.entryName))
     if (candidates.length === 1) {
       entry = candidates[0]
       rootPrefix = candidates[0].entryName.replace(/plugin\.json$/, '')
@@ -232,15 +250,14 @@ export function importPlugin(buffer) {
   } catch {
     throw new Error('plugin.json 解析失败')
   }
-
   const id = String(manifest.id || '').trim()
   if (!ID_RE.test(id)) throw new Error('plugin.json 的 id 无效（只允许小写字母、数字、连字符）')
   if (!manifest.name) throw new Error('plugin.json 缺少 name')
 
-  const dir = pluginDir(id)
+  const dir = pluginDir(userId, id)
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
-  invalidatePluginCache(id)
+  invalidatePluginCache(userId, id)
 
   for (const item of zip.getEntries()) {
     if (item.isDirectory) continue
@@ -252,30 +269,27 @@ export function importPlugin(buffer) {
     writeFileSync(target, item.getData())
   }
 
-  const states = getPluginStates()
+  const states = getPluginStates(userId)
   if (!states[id]) {
     states[id] = { enabled: false, visitor: false, permissions: [] }
-    setPluginStates(states)
+    setPluginStates(userId, states)
   }
-
-  // If the plugin is already enabled, reload it so the new code takes effect immediately.
-  if (getPluginStates()[id]?.enabled) loadPlugin(id)
-
-  return listPlugins().find((p) => p.id === id)
+  if (getPluginStates(userId)[id]?.enabled) loadPlugin(userId, id)
+  return listPlugins(userId).find((p) => p.id === id)
 }
 
-export function deletePlugin(id) {
+export function deletePlugin(userId, id) {
   if (!ID_RE.test(id)) throw new Error('无效的插件 id')
-  rmSync(pluginDir(id), { recursive: true, force: true })
-  runtime.delete(id)
-  invalidatePluginCache(id)
-  const states = getPluginStates()
+  rmSync(pluginDir(userId, id), { recursive: true, force: true })
+  runtime.delete(`${userId}:${id}`)
+  invalidatePluginCache(userId, id)
+  const states = getPluginStates(userId)
   delete states[id]
-  setPluginStates(states)
+  setPluginStates(userId, states)
 }
 
-export function updatePluginState(id, patch) {
-  const states = getPluginStates()
+export function updatePluginState(userId, id, patch) {
+  const states = getPluginStates(userId)
   const current = states[id] || { enabled: false, visitor: false, permissions: [] }
   const next = { ...current }
   if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled)
@@ -284,36 +298,28 @@ export function updatePluginState(id, patch) {
     next.permissions = [...new Set(patch.permissions.map(String))]
   }
   states[id] = next
-  setPluginStates(states)
+  setPluginStates(userId, states)
 
   if (patch.token !== undefined) {
-    const tokens = getSetting('plugin_tokens', {}) || {}
+    const tokens = getUserSetting(userId, 'plugin_tokens', {}) || {}
     tokens[id] = String(patch.token)
-    setSetting('plugin_tokens', tokens)
+    setUserSetting(userId, 'plugin_tokens', tokens)
   }
-
-  if (next.enabled) loadPlugin(id)
-  else runtime.delete(id)
-
-  return listPlugins().find((p) => p.id === id)
+  if (next.enabled) loadPlugin(userId, id)
+  else runtime.delete(`${userId}:${id}`)
+  return listPlugins(userId).find((p) => p.id === id)
 }
 
 /* ------------------------------------------------------------------ */
-/* sandbox                                                             */
+/* sandbox (scoped to the owning user)                                 */
 /* ------------------------------------------------------------------ */
 
-function hasPermission(id, perm) {
-  const states = getPluginStates()
-  const perms = states[id]?.permissions || []
-  return perms.includes(perm)
-}
-
-function buildSandbox(plugin, manifest, dir, registrations) {
-  const permissions = getPluginStates()[plugin]?.permissions || []
+function buildSandbox(userId, pluginId, manifest, dir, registrations) {
+  const permissions = getPluginStates(userId)[pluginId]?.permissions || []
   const api = {
-    id: plugin,
+    id: pluginId,
     manifest,
-    log: (...args) => console.log(`[plugin:${plugin}]`, ...args),
+    log: (...args) => console.log(`[plugin:${userId}:${pluginId}]`, ...args),
     permissions,
     hasPermission: (p) => permissions.includes(p),
 
@@ -324,11 +330,7 @@ function buildSandbox(plugin, manifest, dir, registrations) {
       if (typeof handler === 'function') registrations.cardSources[id] = handler
     },
     registerPage(def) {
-      registrations.pages.push({
-        id: String(def.id || 'index'),
-        title: def.title || manifest.name,
-        icon: def.icon || 'extension',
-      })
+      registrations.pages.push({ id: String(def.id || 'index'), title: def.title || manifest.name, icon: def.icon || 'extension' })
     },
     registerWidget(def) {
       registrations.widgets.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
@@ -343,35 +345,34 @@ function buildSandbox(plugin, manifest, dir, registrations) {
       registrations.postModules.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
     },
     registerEditorTool(def) {
-      registrations.editorTools.push({
-        id: String(def.id || 'tool'),
-        label: def.label || manifest.name,
-        icon: def.icon || 'extension',
-      })
+      registrations.editorTools.push({ id: String(def.id || 'main'), label: def.label || manifest.name, icon: def.icon || 'extension' })
     },
   }
 
+  // content is scoped to the owning user
   if (permissions.includes('posts:read')) {
     api.getPosts = (opts = {}) =>
       db
         .prepare(
           `SELECT id, title, slug, summary, category, tags, created_at FROM posts
-           ${opts.all ? '' : "WHERE status = 'published'"} ORDER BY datetime(created_at) DESC LIMIT ?`
+           WHERE author_id = ? ${opts.all ? '' : "AND status = 'published'"} ORDER BY datetime(created_at) DESC LIMIT ?`
         )
-        .all(Math.min(Number(opts.limit) || 20, 100))
+        .all(userId, Math.min(Number(opts.limit) || 20, 100))
         .map((p) => ({ ...p, tags: JSON.parse(p.tags || '[]') }))
   }
   if (permissions.includes('moments:read')) {
     api.getMoments = (opts = {}) =>
       db
-        .prepare('SELECT id, content, images, created_at FROM moments ORDER BY datetime(created_at) DESC LIMIT ?')
-        .all(Math.min(Number(opts.limit) || 20, 100))
+        .prepare('SELECT id, content, images, created_at FROM moments WHERE author_id = ? ORDER BY datetime(created_at) DESC LIMIT ?')
+        .all(userId, Math.min(Number(opts.limit) || 20, 100))
         .map((m) => ({ ...m, images: JSON.parse(m.images || '[]') }))
   }
   if (permissions.includes('settings:read')) {
     api.getSiteSettings = () => getSetting('site', {})
     api.getProfile = () => {
-      const u = db.prepare('SELECT display_name, username, avatar, bio FROM users ORDER BY id LIMIT 1').get()
+      const u = db
+        .prepare('SELECT display_name, username, avatar, bio FROM users WHERE id = ?')
+        .get(userId)
       return u || null
     }
   }
@@ -383,14 +384,13 @@ function buildSandbox(plugin, manifest, dir, registrations) {
     }
   }
   if (permissions.includes('token')) {
-    api.token = getSetting('plugin_tokens', {})[plugin] || ''
+    api.token = (getUserSetting(userId, 'plugin_tokens', {}) || {})[pluginId] || ''
   }
-
   if (permissions.includes('storage')) {
-    const dir = pluginStorageDir(plugin)
+    const dir = pluginStorageDir(userId, pluginId)
     api.storage = {
-      list: () => listPluginStorage(plugin),
-      stats: () => pluginStorageStats(plugin),
+      list: () => listPluginStorage(userId, pluginId),
+      stats: () => pluginStorageStats(userId, pluginId),
       read: (name) => readFileSync(join(dir, safeName(name)), 'utf-8'),
       write: (name, data) => {
         writeFileSync(join(dir, safeName(name)), data)
@@ -411,68 +411,111 @@ function buildSandbox(plugin, manifest, dir, registrations) {
         writeFileSync(join(dir, safeName(name)), JSON.stringify(obj, null, 2))
         return true
       },
-      url: (name) => `/api/plugins/${plugin}/storage/${encodeURIComponent(safeName(name))}`,
+      url: (name) => `/api/plugins/${pluginId}/storage/${encodeURIComponent(safeName(name))}?username=${encodeURIComponent(usernameOf(userId))}`,
     }
   }
-
   return { plugin: api, console: { log: api.log, error: api.log, warn: api.log } }
 }
 
-function loadPlugin(id) {
-  runtime.delete(id)
-  const manifest = readManifest(id)
-  if (!manifest) {
-    markError(id, 'plugin.json 缺失')
-    return
-  }
-  const appPath = join(pluginDir(id), 'app.js')
-  if (!existsSync(appPath)) {
-    markError(id, 'app.js 缺失')
-    return
-  }
+function loadPlugin(userId, id) {
+  runtime.delete(`${userId}:${id}`)
+  const dir = pluginDir(userId, id)
+  const manifest = readManifest(dir)
+  if (!manifest) return markError(userId, id, 'plugin.json 缺失')
+  const appPath = join(dir, 'app.js')
+  if (!existsSync(appPath)) return markError(userId, id, 'app.js 缺失')
 
-  const registrations = {
-    routes: {},
-    cardSources: {},
-    pages: [],
-    widgets: [],
-    overlays: [],
-    topbars: [],
-    postModules: [],
-    editorTools: [],
-  }
-
+  const registrations = { routes: {}, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], postModules: [], editorTools: [] }
   try {
-    const sandbox = buildSandbox(id, manifest, pluginDir(id), registrations)
+    const sandbox = buildSandbox(userId, id, manifest, dir, registrations)
     const context = vm.createContext(sandbox)
     const code = readFileSync(appPath, 'utf-8')
-    vm.runInContext(code, context, { filename: `plugin:${id}/app.js`, timeout: SCRIPT_TIMEOUT })
-    runtime.set(id, { manifest, dir: pluginDir(id), registrations })
-    clearError(id)
+    vm.runInContext(code, context, { filename: `plugin:${userId}/${id}/app.js`, timeout: SCRIPT_TIMEOUT })
+    runtime.set(`${userId}:${id}`, { manifest, dir, registrations, userId })
+    clearError(userId, id)
   } catch (err) {
-    markError(id, String(err?.message || err))
+    markError(userId, id, String(err?.message || err))
   }
 }
 
-function markError(id, message) {
-  const states = getPluginStates()
+function markError(userId, id, message) {
+  const states = getPluginStates(userId)
   states[id] = { ...(states[id] || {}), error: message }
-  setPluginStates(states)
-  runtime.delete(id)
+  setPluginStates(userId, states)
+  runtime.delete(`${userId}:${id}`)
 }
-
-function clearError(id) {
-  const states = getPluginStates()
+function clearError(userId, id) {
+  const states = getPluginStates(userId)
   if (states[id]?.error) {
     delete states[id].error
-    setPluginStates(states)
+    setPluginStates(userId, states)
+  }
+}
+
+/** One-time: move pre-multi-user global plugins + state into the admin's user dir. */
+function migrateLegacyPlugins() {
+  const admin = primaryUserId()
+  if (admin == null) return
+  const root = userPluginsRoot(admin)
+  const adminHas = existsSync(root) && readdirSync(root).some((d) => existsSync(join(root, d, 'plugin.json')))
+  if (!adminHas && existsSync(PLUGINS_DIR)) {
+    mkdirSync(root, { recursive: true })
+    for (const d of readdirSync(PLUGINS_DIR, { withFileTypes: true })) {
+      if (!d.isDirectory() || !existsSync(join(PLUGINS_DIR, d.name, 'plugin.json'))) continue
+      try {
+        cpSync(join(PLUGINS_DIR, d.name), join(root, d.name), { recursive: true })
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  // state / tokens are migrated independently (copy-if-absent) so they aren't
+  // lost if the plugin code was already moved on an earlier boot
+  if (getUserSetting(admin, 'plugins', null) == null) {
+    const states = getSetting('plugins', {})
+    if (states && Object.keys(states).length) setUserSetting(admin, 'plugins', states)
+  }
+  if (getUserSetting(admin, 'plugin_tokens', null) == null) {
+    const tokens = getSetting('plugin_tokens', {})
+    if (tokens && Object.keys(tokens).length) setUserSetting(admin, 'plugin_tokens', tokens)
+  }
+}
+
+/** One-time: move pre-multi-user plugin STORAGE into the admin's per-user storage. */
+function migrateLegacyPluginStorage() {
+  const admin = primaryUserId()
+  const legacy = join(DATA_DIR, 'plugins')
+  if (admin == null || !existsSync(legacy)) return
+  for (const d of readdirSync(legacy, { withFileTypes: true })) {
+    if (!d.isDirectory() || !ID_RE.test(d.name)) continue
+    const srcRoot = join(legacy, d.name)
+    let dstRoot
+    try {
+      dstRoot = pluginStorageDir(admin, d.name)
+    } catch {
+      continue
+    }
+    for (const f of readdirSync(srcRoot, { withFileTypes: true })) {
+      if (!f.isFile()) continue
+      const target = join(dstRoot, f.name)
+      if (existsSync(target)) continue
+      try {
+        cpSync(join(srcRoot, f.name), target)
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
 export function loadAllPlugins() {
-  const states = getPluginStates()
-  for (const [id, state] of Object.entries(states)) {
-    if (state.enabled && existsSync(pluginDir(id))) loadPlugin(id)
+  migrateLegacyPlugins()
+  migrateLegacyPluginStorage()
+  for (const u of db.prepare('SELECT id FROM users').all()) {
+    const states = getPluginStates(u.id)
+    for (const [id, state] of Object.entries(states)) {
+      if (state.enabled && existsSync(pluginDir(u.id, id))) loadPlugin(u.id, id)
+    }
   }
 }
 
@@ -480,32 +523,32 @@ export function loadAllPlugins() {
 /* runtime access                                                      */
 /* ------------------------------------------------------------------ */
 
-export function getRuntimeManifest(forVisitor) {
+export function getRuntimeManifest(forVisitor, userId) {
+  const key = `${userId}:${forVisitor ? 1 : 0}`
   const now = Date.now()
-  if (
-    runtimeManifestCache.value &&
-    runtimeManifestCache.visitor === forVisitor &&
-    now - runtimeManifestCache.at < RUNTIME_MANIFEST_TTL
-  ) {
-    return runtimeManifestCache.value
-  }
+  const cached = runtimeManifestCache.get(key)
+  if (cached && now - cached.at < RUNTIME_MANIFEST_TTL) return cached.value
 
-  const states = getPluginStates()
+  const states = getPluginStates(userId)
+  const owner = usernameOf(userId)
   const plugins = []
-  for (const [id, entry] of runtime.entries()) {
+  for (const [rk, entry] of runtime.entries()) {
+    if (entry.userId !== userId) continue
+    const id = rk.slice(`${userId}:`.length)
     const state = states[id] || {}
     if (!state.enabled) continue
     if (forVisitor && !state.visitor) continue
     const { manifest, registrations } = entry
-    const meta = pluginMeta(id)
+    const meta = pluginMeta(userId, id)
     plugins.push({
       id,
+      owner,
       name: manifest.name || id,
       version: manifest.version || '0.0.0',
       rev: meta.rev,
       hasUi: meta.hasUi,
       hasJs: meta.hasJs,
-      assetBase: `/plugins/${id}`,
+      assetBase: `/api/plugins/${id}/asset`,
       capabilities: manifest.capabilities || {},
       pages: registrations.pages,
       widgets: registrations.widgets,
@@ -516,32 +559,35 @@ export function getRuntimeManifest(forVisitor) {
       cardSources: Object.keys(registrations.cardSources).map((s) => ({ id: s })),
     })
   }
-  runtimeManifestCache.visitor = forVisitor
-  runtimeManifestCache.at = now
-  runtimeManifestCache.value = plugins
+  runtimeManifestCache.set(key, { at: now, value: plugins })
   return plugins
 }
 
-export function hasCardSource(id, source) {
-  return Boolean(runtime.get(id)?.registrations.cardSources[source])
+export function hasCardSource(userId, id, source) {
+  return Boolean(runtime.get(`${userId}:${id}`)?.registrations.cardSources[source])
 }
 
-export async function getCardData(id, source, params = {}) {
-  const entry = runtime.get(id)
-  const handler = entry?.registrations.cardSources[source]
+export async function getCardData(userId, id, source, params = {}) {
+  const handler = runtime.get(`${userId}:${id}`)?.registrations.cardSources[source]
   if (!handler) throw new Error('数据源不存在')
   return await handler(params)
 }
 
-export async function callRoute(id, name, req) {
-  const entry = runtime.get(id)
-  const handler = entry?.registrations.routes[name]
+export async function callRoute(userId, id, name, req) {
+  const handler = runtime.get(`${userId}:${id}`)?.registrations.routes[name]
   if (!handler) throw new Error('接口不存在')
   return await handler(req)
 }
 
-export function getPluginUi(id) {
-  const file = join(pluginDir(id), 'ui.ux')
+export function getPluginUi(userId, id) {
+  const file = join(pluginDir(userId, id), 'ui.ux')
   if (!existsSync(file)) return null
   return readFileSync(file, 'utf-8')
+}
+
+export function pluginAssetPath(userId, id, relPath) {
+  const clean = String(relPath || '').replace(/^\/+/, '')
+  if (!clean || clean.includes('..')) return null
+  const p = join(pluginDir(userId, id), clean)
+  return existsSync(p) ? p : null
 }

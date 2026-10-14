@@ -31,10 +31,38 @@ export function signToken(user) {
   })
 }
 
+function safeParse(value, fallback) {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed == null ? fallback : parsed
+  } catch {
+    return fallback
+  }
+}
+
 export function publicUser(user) {
   if (!user) return null
-  const { password_hash, ...rest } = user
-  return rest
+  const { password_hash, permissions, plugin_permissions, ...rest } = user
+  return {
+    ...rest,
+    role: rest.role || 'user',
+    permissions: safeParse(permissions, {}),
+    pluginPermissions: safeParse(plugin_permissions, []),
+  }
+}
+
+/** Whether a user has a capability (admins have everything). */
+export function can(user, cap) {
+  if (!user) return false
+  if (user.role === 'admin') return true
+  const perms = safeParse(user.permissions, {})
+  return Boolean(perms[cap])
+}
+
+export function requireAdmin(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: '未登录' })
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' })
+  next()
 }
 
 export function verifyToken(token) {
