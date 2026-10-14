@@ -226,7 +226,8 @@ export function listPlugins(userId) {
   })
 }
 
-export function importPlugin(userId, buffer) {
+/** Parse + validate a plugin ZIP without installing it. */
+export function parsePluginPackage(buffer) {
   let zip
   try {
     zip = new AdmZip(buffer)
@@ -253,6 +254,24 @@ export function importPlugin(userId, buffer) {
   const id = String(manifest.id || '').trim()
   if (!ID_RE.test(id)) throw new Error('plugin.json 的 id 无效（只允许小写字母、数字、连字符）')
   if (!manifest.name) throw new Error('plugin.json 缺少 name')
+  return { zip, manifest, id, rootPrefix }
+}
+
+/** Read a plugin package's metadata for a pre-install confirmation dialog. */
+export function inspectPlugin(buffer) {
+  const { manifest, id } = parsePluginPackage(buffer)
+  return {
+    id,
+    name: manifest.name,
+    version: manifest.version || '0.0.0',
+    description: manifest.description || '',
+    author: manifest.author || '',
+    permissions: Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : [],
+  }
+}
+
+export function importPlugin(userId, buffer) {
+  const { zip, manifest, id, rootPrefix } = parsePluginPackage(buffer)
 
   const dir = pluginDir(userId, id)
   rmSync(dir, { recursive: true, force: true })

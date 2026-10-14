@@ -54,6 +54,18 @@ const pluginUsers = ref<{ id: number; username: string; display_name: string }[]
 function pluginQuery() {
   return pluginOwner.value ? `?username=${encodeURIComponent(pluginOwner.value)}` : ''
 }
+// pre-install confirmation dialog
+interface ImportPreview {
+  file: File
+  id: string
+  name: string
+  version: string
+  description: string
+  author: string
+  permissions: string[]
+}
+const importPreview = ref<ImportPreview | null>(null)
+const importState = reactive<{ busy: boolean; progress: number | null }>({ busy: false, progress: null })
 
 const profile = reactive({ display_name: '', email: '', avatar: '', bio: '' })
 const homeBanner = reactive({ banner: '', subtitle: '', description: '' })
@@ -974,14 +986,69 @@ async function onImportPlugin(e: Event) {
   try {
     const form = new FormData()
     form.append('file', file)
-    await api(`/plugins/import${pluginQuery()}`, { method: 'POST', body: form, raw: true })
-    await loadInstalledPlugins()
-    await loadPlugins()
-    notify('插件已导入，请在下方启用', 'success')
+    const { plugin } = await api<{ plugin: Omit<ImportPreview, 'file'> }>('/plugins/inspect', {
+      method: 'POST',
+      body: form,
+      raw: true,
+    })
+    importPreview.value = { file, ...plugin }
   } catch (err: any) {
-    notify(err.message || '导入失败', 'error')
+    notify(err.message || '无法解析插件包', 'error')
   } finally {
     pluginBusy.value = false
+  }
+}
+
+function closeImportPreview() {
+  if (importState.busy) return
+  importPreview.value = null
+}
+
+function uploadPluginZip(file: File): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    form.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `/api/plugins/import${pluginQuery()}`)
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest')
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && importState.progress !== null) importState.progress = ev.loaded / ev.total
+    }
+    xhr.upload.onload = () => {
+      // upload done; server is now extracting (indeterminate)
+      importState.progress = null
+    }
+    xhr.onload = () => {
+      let data: any = null
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch {
+        data = null
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve()
+      else reject(new Error(data?.error || `安装失败 (${xhr.status})`))
+    }
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.send(form)
+  })
+}
+
+async function confirmImportPlugin() {
+  const p = importPreview.value
+  if (!p) return
+  importState.busy = true
+  importState.progress = 0
+  try {
+    await uploadPluginZip(p.file)
+    importPreview.value = null
+    await loadInstalledPlugins()
+    await loadPlugins()
+    notify(`插件「${p.name}」已安装，请在下方启用`, 'success')
+  } catch (err: any) {
+    notify(err.message || '安装失败', 'error')
+  } finally {
+    importState.busy = false
+    importState.progress = null
   }
 }
 
@@ -1662,6 +1729,76 @@ const PERMISSION_LABELS: Record<string, string> = {
               </div>
             </div>
           </div>
+
+          <!-- install confirmation -->
+          <BaseDialog
+            :open="!!importPreview"
+            title="安装插件"
+            :close-on-scrim="!importState.busy"
+            @close="closeImportPreview"
+          >
+            <template v-if="importPreview">
+              <div class="plugin-preview">
+                <div class="preview-row">
+                  <span class="preview-key">插件名称</span>
+                  <span class="preview-val">{{ importPreview.name }}</span>
+                </div>
+                <div class="preview-row">
+                  <span class="preview-key">插件 ID</span>
+                  <code class="preview-val">{{ importPreview.id }}</code>
+                </div>
+                <div class="preview-row">
+                  <span class="preview-key">版本</span>
+                  <span class="preview-val">v{{ importPreview.version }}</span>
+                </div>
+                <div class="preview-row">
+                  <span class="preview-key">作者</span>
+                  <span class="preview-val">{{ importPreview.author || '—' }}</span>
+                </div>
+                <div class="preview-row">
+                  <span class="preview-key">说明</span>
+                  <span class="preview-val">{{ importPreview.description || '（无说明）' }}</span>
+                </div>
+              </div>
+
+              <div class="preview-perms">
+                <span class="mini-label">申请的权限</span>
+                <div class="perm-chips">
+                  <span v-if="!importPreview.permissions.length" class="md-muted tiny">无</span>
+                  <span
+                    v-for="perm in importPreview.permissions"
+                    :key="perm"
+                    class="perm-chip"
+                    :title="perm"
+                  >
+                    {{ PERMISSION_LABELS[perm] || perm }}
+                  </span>
+                </div>
+                <p class="md-muted tiny" style="margin-top: 8px">
+                  安装后可在下方启用；启用与「对访客开放」代表执行插件代码，仅管理员可操作。
+                </p>
+              </div>
+
+              <div
+                class="backup-progress install-progress"
+                :class="{ show: importState.busy, indeterminate: importState.progress === null }"
+              >
+                <div
+                  class="backup-progress-fill"
+                  :style="{ width: importState.progress !== null ? `${Math.max(4, Math.round(importState.progress * 100))}%` : '' }"
+                />
+              </div>
+              <p v-if="importState.busy" class="md-muted tiny">正在安装…</p>
+            </template>
+
+            <template #actions>
+              <button class="btn" :disabled="importState.busy" @click="closeImportPreview">取消</button>
+              <button class="btn btn-filled" :disabled="importState.busy" @click="confirmImportPlugin">
+                <span v-if="importState.busy" class="spinner" style="width: 15px; height: 15px" />
+                <AppIcon v-else name="check" :size="16" />确认安装
+              </button>
+            </template>
+          </BaseDialog>
         </section>
 
         <!-- account -->
@@ -2523,4 +2660,56 @@ const PERMISSION_LABELS: Record<string, string> = {
 }
 .up-main { flex: 1; min-width: 0; }
 .up-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.plugin-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.preview-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+.preview-key {
+  flex: none;
+  width: 72px;
+  color: var(--md-on-surface-variant);
+  font-size: 0.82rem;
+}
+.preview-val {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+code.preview-val {
+  font-family: var(--md-font-mono, ui-monospace, monospace);
+  background: var(--md-surface-container-high);
+  padding: 1px 7px;
+  border-radius: var(--md-shape-sm);
+  font-size: 0.85rem;
+}
+.preview-perms {
+  margin-bottom: 8px;
+}
+.perm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.perm-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+  font-size: 0.8rem;
+}
+.install-progress {
+  margin-top: 12px;
+}
 </style>

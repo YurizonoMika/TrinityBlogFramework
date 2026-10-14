@@ -10,6 +10,7 @@ import { requireAuth, requireAdmin, verifyToken, can, sessionUser } from '../aut
 import { pageUsername } from '../scope.js'
 import {
   listPlugins,
+  inspectPlugin,
   importPlugin,
   deletePlugin,
   updatePluginState,
@@ -85,6 +86,15 @@ router.get('/manage', requireAuth, (req, res) => {
   const owner = manageOwner(req)
   if (!canManage(req, owner)) return res.status(403).json({ error: '没有权限' })
   res.json({ plugins: listPlugins(owner.id) })
+})
+
+router.post('/inspect', requireAuth, requireAdmin, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '没有收到文件' })
+  try {
+    res.json({ plugin: inspectPlugin(req.file.buffer) })
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) })
+  }
 })
 
 router.post('/import', requireAuth, requireAdmin, upload.single('file'), (req, res) => {
