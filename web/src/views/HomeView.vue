@@ -286,6 +286,7 @@ function toggleProvider(p: string) {
             :plugin="(pluginWidgetFor(card) as any).plugin"
             :id="(pluginWidgetFor(card) as any).widgetId"
             kind="widget"
+            mount="visible"
             :title="card.title"
           />
           <p v-else-if="card.type.startsWith('plugin:')" class="md-muted">插件未启用，无法显示该小组件</p>
@@ -294,6 +295,7 @@ function toggleProvider(p: string) {
             :plugin="pluginFor(card) as RuntimePlugin"
             :source="card.config.source"
             kind="widget"
+            mount="visible"
             :title="card.title"
           />
           <p v-else-if="card.type === 'plugin'" class="md-muted">未选择插件数据源（点编辑选择）</p>
@@ -301,6 +303,7 @@ function toggleProvider(p: string) {
             v-else-if="card.type === 'plugin-widget' && pluginFor(card)"
             :plugin="pluginFor(card) as RuntimePlugin"
             kind="widget"
+            mount="visible"
             :title="card.title"
           />
           <p v-else-if="card.type === 'plugin-widget'" class="md-muted">未选择插件小组件（点编辑选择）</p>

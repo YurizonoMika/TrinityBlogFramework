@@ -15,13 +15,64 @@ const props = defineProps<{
   data?: unknown
   kind?: 'widget' | 'page' | 'module' | 'overlay' | 'topbar'
   id?: string
+  /** when to mount the plugin: immediately, when scrolled near, or when idle */
+  mount?: 'eager' | 'visible' | 'idle'
 }>()
 
+const rootRef = ref<HTMLElement | null>(null)
 const hostRef = ref<HTMLElement | null>(null)
 const loading = ref(true)
 const error = ref('')
 const resolvedData = ref<any>(null)
+const started = ref(false)
 let cleanup: (() => void) | undefined
+let observer: IntersectionObserver | null = null
+let cancelScheduled: (() => void) | null = null
+
+function startLoad() {
+  if (started.value) return
+  started.value = true
+  load()
+}
+
+/** Defer the initial load so many plugins don't all mount during first paint. */
+function scheduleLoad() {
+  const mode = props.mount || 'eager'
+  if (mode === 'eager') {
+    startLoad()
+    return
+  }
+  if (mode === 'visible') {
+    if (typeof IntersectionObserver === 'undefined' || !rootRef.value) {
+      startLoad()
+      return
+    }
+    observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          observer?.disconnect()
+          observer = null
+          startLoad()
+        }
+      },
+      { rootMargin: '400px 0px' }
+    )
+    observer.observe(rootRef.value)
+    return
+  }
+  // idle
+  const ric = (window as any).requestIdleCallback as
+    | ((cb: () => void, opts?: { timeout: number }) => number)
+    | undefined
+  const cic = (window as any).cancelIdleCallback as ((id: number) => void) | undefined
+  if (typeof ric === 'function') {
+    const id = ric(() => startLoad(), { timeout: 1500 })
+    cancelScheduled = () => cic?.(id)
+  } else {
+    const id = window.setTimeout(() => startLoad(), 120)
+    cancelScheduled = () => clearTimeout(id)
+  }
+}
 
 const FRAMEWORK_CSS = `
   :host { display: block; color: var(--md-on-surface); font-family: var(--md-font, system-ui, sans-serif); }
@@ -190,13 +241,22 @@ async function load() {
   }
 }
 
-onBeforeUnmount(() => cleanup?.())
-onMounted(load)
-watch(() => `${props.plugin.id}:${props.source || ''}:${auth.user ? 'auth' : 'guest'}`, load)
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  cancelScheduled?.()
+  cleanup?.()
+})
+onMounted(scheduleLoad)
+watch(
+  () => `${props.plugin.id}:${props.source || ''}:${auth.user ? 'auth' : 'guest'}`,
+  () => {
+    if (started.value) load()
+  }
+)
 </script>
 
 <template>
-  <div class="plugin-view">
+  <div ref="rootRef" class="plugin-view">
     <div
       v-if="loading"
       class="skeleton"

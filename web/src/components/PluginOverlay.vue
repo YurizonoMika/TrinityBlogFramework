@@ -25,6 +25,7 @@ const active = computed(() =>
       :key="`${a.plugin.id}-${a.overlay.id}`"
       :plugin="a.plugin"
       kind="overlay"
+      mount="idle"
       :id="a.overlay.id"
     />
   </div>

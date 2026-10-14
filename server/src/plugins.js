@@ -105,18 +105,52 @@ function readManifest(id) {
   }
 }
 
-/** A revision token derived from the newest file mtime — used to bust client caches after re-import. */
-function pluginRevision(id) {
+/*
+ * Per-plugin metadata (revision token + hasUi/hasJs) is cached and keyed on the
+ * plugin directory's mtime, so listing plugins / building the runtime manifest
+ * no longer re-reads the whole directory on every request. Re-importing a plugin
+ * recreates its directory (new mtime), so the cache refreshes automatically;
+ * admin actions additionally invalidate it.
+ */
+const pluginMetaCache = new Map() // id -> { dirMtime, rev, hasUi, hasJs }
+const runtimeManifestCache = { visitor: null, at: 0, value: null }
+const RUNTIME_MANIFEST_TTL = 2000
+
+function invalidatePluginCache(id) {
+  if (id) pluginMetaCache.delete(id)
+  else pluginMetaCache.clear()
+  runtimeManifestCache.value = null
+}
+
+function pluginMeta(id) {
+  const dir = pluginDir(id)
+  let dirMtime = 0
   try {
-    const dir = pluginDir(id)
+    dirMtime = statSync(dir).mtimeMs
+  } catch {
+    return { rev: '0', hasUi: false, hasJs: false }
+  }
+  const cached = pluginMetaCache.get(id)
+  if (cached && cached.dirMtime === dirMtime) return cached
+
+  let rev = '0'
+  let hasUi = false
+  let hasJs = false
+  try {
     let max = 0
     for (const f of readdirSync(dir, { withFileTypes: true })) {
-      if (f.isFile()) max = Math.max(max, statSync(join(dir, f.name)).mtimeMs)
+      if (!f.isFile()) continue
+      max = Math.max(max, statSync(join(dir, f.name)).mtimeMs)
+      if (f.name === 'ui.ux') hasUi = true
+      else if (f.name === 'ui.js') hasJs = true
     }
-    return String(Math.round(max))
+    rev = String(Math.round(max))
   } catch {
-    return '0'
+    /* keep defaults */
   }
+  const meta = { dirMtime, rev, hasUi, hasJs }
+  pluginMetaCache.set(id, meta)
+  return meta
 }
 
 export function getPluginStates() {
@@ -125,6 +159,7 @@ export function getPluginStates() {
 
 function setPluginStates(states) {
   setSetting(STATE_KEY, states)
+  invalidatePluginCache()
 }
 
 export function listPlugins() {
@@ -137,6 +172,7 @@ export function listPlugins() {
     const state = states[id] || {}
     const dir = pluginDir(id)
     const reg = runtime.get(id)?.registrations
+    const meta = pluginMeta(id)
     return {
       id,
       name: manifest.name || id,
@@ -145,11 +181,11 @@ export function listPlugins() {
       author: manifest.author || '',
       capabilities: manifest.capabilities || {},
       requestedPermissions: manifest.permissions || [],
-      hasUi: existsSync(join(dir, 'ui.ux')),
-      hasJs: existsSync(join(dir, 'ui.js')),
+      hasUi: meta.hasUi,
+      hasJs: meta.hasJs,
       hasSources: existsSync(join(dir, 'sources')),
       hasApp: existsSync(join(dir, 'app.js')),
-      rev: pluginRevision(id),
+      rev: meta.rev,
       enabled: state.enabled !== false && state.enabled !== undefined ? state.enabled : false,
       visitor: Boolean(state.visitor),
       permissions: Array.isArray(state.permissions) ? state.permissions : [],
@@ -204,6 +240,7 @@ export function importPlugin(buffer) {
   const dir = pluginDir(id)
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
+  invalidatePluginCache(id)
 
   for (const item of zip.getEntries()) {
     if (item.isDirectory) continue
@@ -231,6 +268,7 @@ export function deletePlugin(id) {
   if (!ID_RE.test(id)) throw new Error('无效的插件 id')
   rmSync(pluginDir(id), { recursive: true, force: true })
   runtime.delete(id)
+  invalidatePluginCache(id)
   const states = getPluginStates()
   delete states[id]
   setPluginStates(states)
@@ -443,6 +481,15 @@ export function loadAllPlugins() {
 /* ------------------------------------------------------------------ */
 
 export function getRuntimeManifest(forVisitor) {
+  const now = Date.now()
+  if (
+    runtimeManifestCache.value &&
+    runtimeManifestCache.visitor === forVisitor &&
+    now - runtimeManifestCache.at < RUNTIME_MANIFEST_TTL
+  ) {
+    return runtimeManifestCache.value
+  }
+
   const states = getPluginStates()
   const plugins = []
   for (const [id, entry] of runtime.entries()) {
@@ -450,13 +497,14 @@ export function getRuntimeManifest(forVisitor) {
     if (!state.enabled) continue
     if (forVisitor && !state.visitor) continue
     const { manifest, registrations } = entry
+    const meta = pluginMeta(id)
     plugins.push({
       id,
       name: manifest.name || id,
       version: manifest.version || '0.0.0',
-      rev: pluginRevision(id),
-      hasUi: existsSync(join(entry.dir, 'ui.ux')),
-      hasJs: existsSync(join(entry.dir, 'ui.js')),
+      rev: meta.rev,
+      hasUi: meta.hasUi,
+      hasJs: meta.hasJs,
       assetBase: `/plugins/${id}`,
       capabilities: manifest.capabilities || {},
       pages: registrations.pages,
@@ -468,6 +516,9 @@ export function getRuntimeManifest(forVisitor) {
       cardSources: Object.keys(registrations.cardSources).map((s) => ({ id: s })),
     })
   }
+  runtimeManifestCache.visitor = forVisitor
+  runtimeManifestCache.at = now
+  runtimeManifestCache.value = plugins
   return plugins
 }
 

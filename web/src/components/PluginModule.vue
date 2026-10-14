@@ -17,6 +17,7 @@ const plugin = computed(() => findPlugin(props.pluginId))
       :plugin="plugin"
       :data="moduleProps || {}"
       kind="module"
+      mount="visible"
       :id="moduleId"
       :title="plugin.postModules.find((m) => m.id === moduleId)?.title || plugin.name"
     />
