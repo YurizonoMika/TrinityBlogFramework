@@ -13,7 +13,7 @@ const props = defineProps<{
   source?: string
   title?: string
   data?: unknown
-  kind?: 'widget' | 'page' | 'module' | 'overlay'
+  kind?: 'widget' | 'page' | 'module' | 'overlay' | 'topbar'
   id?: string
 }>()
 
@@ -58,7 +58,9 @@ function makeApi(pluginId: string) {
   }
   return {
     pluginId,
-    isAdmin: Boolean(auth.user),
+    get isAdmin() {
+      return Boolean(auth.user)
+    },
     dialog: {
       confirm: (opts: any) => confirmDialog(opts),
       alert: (opts: any) => alertDialog(opts),
@@ -190,12 +192,20 @@ async function load() {
 
 onBeforeUnmount(() => cleanup?.())
 onMounted(load)
-watch(() => `${props.plugin.id}:${props.source || ''}`, load)
+watch(() => `${props.plugin.id}:${props.source || ''}:${auth.user ? 'auth' : 'guest'}`, load)
 </script>
 
 <template>
   <div class="plugin-view">
-    <div v-if="loading" class="skeleton" style="height: 84px; border-radius: 20px" />
+    <div
+      v-if="loading"
+      class="skeleton"
+      :style="
+        kind === 'topbar'
+          ? 'height: 42px; width: 128px; border-radius: 999px'
+          : 'height: 84px; border-radius: 20px'
+      "
+    />
     <div v-else-if="error" class="plugin-error md-muted">插件加载失败：{{ error }}</div>
     <template v-else>
       <div v-if="plugin.hasUi || plugin.hasJs" ref="hostRef" class="plugin-ui" />

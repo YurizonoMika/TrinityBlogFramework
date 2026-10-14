@@ -29,7 +29,7 @@ const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } })
 const storageUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 30 * 1024 * 1024, files: 30 },
+  limits: { fileSize: 80 * 1024 * 1024, files: 30 },
 })
 
 function canAccess(id, req) {

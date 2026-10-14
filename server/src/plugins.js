@@ -162,6 +162,7 @@ export function listPlugins() {
       postModules: reg?.postModules || [],
       editorTools: reg?.editorTools || [],
       overlays: reg?.overlays || [],
+      topbars: reg?.topbars || [],
       cardSources: reg ? Object.keys(reg.cardSources).map((s) => ({ id: s })) : [],
     }
   })
@@ -297,6 +298,9 @@ function buildSandbox(plugin, manifest, dir, registrations) {
     registerOverlay(def = {}) {
       registrations.overlays.push({ id: String(def.id || 'main'), pages: def.pages || ['*'] })
     },
+    registerTopbar(def = {}) {
+      registrations.topbars.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
+    },
     registerPostModule(def) {
       registrations.postModules.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
     },
@@ -395,6 +399,7 @@ function loadPlugin(id) {
     pages: [],
     widgets: [],
     overlays: [],
+    topbars: [],
     postModules: [],
     editorTools: [],
   }
@@ -457,6 +462,7 @@ export function getRuntimeManifest(forVisitor) {
       pages: registrations.pages,
       widgets: registrations.widgets,
       overlays: registrations.overlays,
+      topbars: registrations.topbars,
       postModules: registrations.postModules,
       editorTools: registrations.editorTools,
       cardSources: Object.keys(registrations.cardSources).map((s) => ({ id: s })),

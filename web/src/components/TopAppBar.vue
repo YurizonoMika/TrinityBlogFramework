@@ -5,6 +5,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import PluginView from './PluginView.vue'
 import { auth, logout } from '@/stores/auth'
 import { site, toggleTheme } from '@/stores/site'
 import { openPalette } from '@/stores/palette'
@@ -23,11 +24,15 @@ const navMeasure = ref<HTMLElement | null>(null)
 const brandRef = ref<HTMLElement | null>(null)
 const searchRef = ref<HTMLElement | null>(null)
 const actionsRef = ref<HTMLElement | null>(null)
+const topbarCenterRef = ref<HTMLElement | null>(null)
 const collapsed = ref(false)
 let resizeObserver: ResizeObserver | null = null
 
 const title = computed(() => site.site.title || '我的主页')
 const logo = computed(() => site.site.icon || '/favicon.svg')
+const topbarPlugins = computed(() =>
+  plugins.list.flatMap((p) => (p.topbars || []).map((tb) => ({ plugin: p, topbar: tb })))
+)
 const pluginPages = computed(() =>
   plugins.list.flatMap((p) =>
     (p.pages || []).map((pg) => ({ path: `/p/${p.id}/${pg.id}`, title: pg.title, icon: pg.icon || 'extension' }))
@@ -54,6 +59,7 @@ function measure() {
     (brandRef.value?.offsetWidth || 0) +
     (searchRef.value?.offsetWidth || 0) +
     (actionsRef.value?.offsetWidth || 0) +
+    (topbarCenterRef.value?.offsetWidth || 0) +
     72
   collapsed.value = bar.clientWidth - others < need
 }
@@ -77,7 +83,7 @@ function doLogout() {
 }
 
 watch(
-  () => [navItems.value.length, title.value].join(),
+  () => [navItems.value.length, title.value, topbarPlugins.value.length].join(),
   () => nextTick(measure)
 )
 
@@ -86,6 +92,7 @@ onMounted(() => {
   if (typeof ResizeObserver !== 'undefined' && topbarInner.value) {
     resizeObserver = new ResizeObserver(() => measure())
     resizeObserver.observe(topbarInner.value)
+    if (topbarCenterRef.value) resizeObserver.observe(topbarCenterRef.value)
   }
   window.addEventListener('resize', measure)
   nextTick(measure)
@@ -123,7 +130,17 @@ onUnmounted(() => {
         </a>
       </nav>
 
-      <div class="spacer" />
+      <div class="topbar-center">
+        <div ref="topbarCenterRef" class="topbar-center-inner">
+          <PluginView
+            v-for="t in topbarPlugins"
+            :key="`${t.plugin.id}-${t.topbar.id}`"
+            :plugin="t.plugin"
+            kind="topbar"
+            :id="t.topbar.id"
+          />
+        </div>
+      </div>
 
       <button ref="searchRef" class="search-trigger" type="button" @click="openPalette()">
         <AppIcon name="search" :size="18" />
@@ -279,8 +296,20 @@ onUnmounted(() => {
   background: var(--md-secondary-container);
   color: var(--md-on-secondary-container);
 }
-.spacer {
-  flex: 1;
+.topbar-center {
+  flex: 1 1 auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+  padding: 0 6px;
+}
+.topbar-center-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
 }
 .search-trigger {
   display: inline-flex;

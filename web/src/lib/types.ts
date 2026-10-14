@@ -54,6 +54,10 @@ export interface PluginOverlay {
   id: string
   pages: string[]
 }
+export interface PluginTopbar {
+  id: string
+  title: string
+}
 export interface PluginEditorTool {
   id: string
   label: string
@@ -72,6 +76,7 @@ export interface RuntimePlugin {
   pages: PluginPage[]
   widgets: PluginPage[]
   overlays: PluginOverlay[]
+  topbars: PluginTopbar[]
   postModules: PluginPage[]
   editorTools: PluginEditorTool[]
   cardSources: { id: string }[]
@@ -99,6 +104,7 @@ export interface InstalledPlugin {
   postModules: PluginPage[]
   editorTools: PluginEditorTool[]
   overlays: PluginOverlay[]
+  topbars: PluginTopbar[]
   cardSources: { id: string }[]
 }
 export interface Card {
