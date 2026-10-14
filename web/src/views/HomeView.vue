@@ -496,13 +496,12 @@ function toggleProvider(p: string) {
   flex-wrap: wrap;
 }
 .card-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: clamp(16px, 2vw, 24px);
-  align-items: flex-start;
+  align-items: start;
 }
 .skeleton-card {
-  flex: 1 1 var(--card-basis, 44%);
   min-width: 0;
   height: 220px;
   border-radius: var(--fluid-radius, 24px);
@@ -589,6 +588,11 @@ function toggleProvider(p: string) {
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
   margin-bottom: 6px;
+}
+@media (max-width: 760px) {
+  .card-grid {
+    grid-template-columns: 1fr;
+  }
 }
 @media (max-width: 640px) {
   .link-row {

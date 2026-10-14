@@ -81,7 +81,6 @@ const TYPE_META: Record<string, { icon: string; label: string }> = {
 
 <style scoped>
 .card-shell {
-  flex: 1 1 var(--card-basis, 44%);
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -96,7 +95,7 @@ const TYPE_META: Record<string, { icon: string; label: string }> = {
     opacity var(--md-dur-medium) var(--md-ease-standard);
 }
 .card-shell.full {
-  flex-basis: 100%;
+  grid-column: 1 / -1;
 }
 .card-shell.editing {
   cursor: grab;
@@ -164,5 +163,12 @@ const TYPE_META: Record<string, { icon: string; label: string }> = {
 .card-body {
   flex: 1;
   min-width: 0;
+}
+
+/* single column on narrow screens: a full card no longer needs to span */
+@media (max-width: 760px) {
+  .card-shell.full {
+    grid-column: auto;
+  }
 }
 </style>
