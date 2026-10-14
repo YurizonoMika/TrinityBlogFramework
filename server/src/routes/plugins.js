@@ -6,7 +6,7 @@ import multer from 'multer'
 import crypto from 'node:crypto'
 import { extname } from 'node:path'
 import { db, primaryUserId } from '../db.js'
-import { requireAuth, isAuthed, verifyToken, can } from '../auth.js'
+import { requireAuth, requireAdmin, verifyToken, can, sessionUser } from '../auth.js'
 import { pageUsername } from '../scope.js'
 import {
   listPlugins,
@@ -56,15 +56,28 @@ function canManage(req, owner) {
   return req.user.id === owner.id && can(req.user, 'plugins')
 }
 
+/** Resolve the requesting user from `req.user`, the Bearer header, or a
+ *  `?token=` stand-in — but only owner/admin may access non-visitor plugins. */
+function resolvePluginUser(req, ownerId) {
+  if (req.user) return req.user
+  const viaSession = sessionUser(req) // HttpOnly cookie or Bearer header
+  if (viaSession) return viaSession
+  if (req.query.token) {
+    const payload = verifyToken(String(req.query.token))
+    if (payload) {
+      return db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub) || null
+    }
+  }
+  return null
+}
+
 function canAccess(owner, id, req) {
   if (!owner) return false
   const state = getPluginStates(owner.id)[id]
   if (!state || !state.enabled) return false
   if (state.visitor) return true
-  if (req.user && (req.user.role === 'admin' || req.user.id === owner.id)) return true
-  if (isAuthed(req)) return true
-  if (req.query.token && verifyToken(String(req.query.token))) return true
-  return false
+  const user = resolvePluginUser(req, owner.id)
+  return Boolean(user && (user.role === 'admin' || user.id === owner.id))
 }
 
 // ---- management ----
@@ -74,9 +87,9 @@ router.get('/manage', requireAuth, (req, res) => {
   res.json({ plugins: listPlugins(owner.id) })
 })
 
-router.post('/import', requireAuth, upload.single('file'), (req, res) => {
+router.post('/import', requireAuth, requireAdmin, upload.single('file'), (req, res) => {
   const owner = manageOwner(req)
-  if (!canManage(req, owner)) return res.status(403).json({ error: '没有权限' })
+  if (!owner) return res.status(400).json({ error: '没有权限' })
   if (!req.file) return res.status(400).json({ error: '没有收到文件' })
   try {
     const plugin = importPlugin(owner.id, req.file.buffer)
@@ -99,6 +112,10 @@ router.put('/:id', requireAuth, (req, res) => {
   const owner = manageOwner(req)
   if (!canManage(req, owner)) return res.status(403).json({ error: '没有权限' })
   const patch = req.body || {}
+  // running a plugin (server-side + in visitors' browsers) is an admin-only action
+  if ((patch.enabled !== undefined || patch.visitor !== undefined) && req.user.role !== 'admin') {
+    return res.status(403).json({ error: '仅管理员可以启用插件或对访客公开' })
+  }
   // non-admins may only grant plugin permissions the admin allowed for them
   if (patch.permissions !== undefined && req.user.role !== 'admin') {
     const allowed = new Set(allowedPluginPerms(owner))
@@ -189,7 +206,10 @@ router.delete('/:id/storage/:file', requireAuth, (req, res) => {
 // ---- runtime (public, gated) ----
 router.get('/runtime', (req, res) => {
   const owner = ownerFrom(req)
-  res.json({ plugins: getRuntimeManifest(!isAuthed(req), owner ? owner.id : primaryUserId()) })
+  const viewer = sessionUser(req)
+  // only the owner's own session may load their private (non-visitor) plugins
+  const canSeePrivate = Boolean(viewer && owner && viewer.id === owner.id)
+  res.json({ plugins: getRuntimeManifest(canSeePrivate, owner ? owner.id : primaryUserId()) })
 })
 
 // plugin static assets (ui.js, images bundled with the plugin)
@@ -227,7 +247,8 @@ async function handleCall(req, res) {
   const owner = ownerFrom(req)
   if (!canAccess(owner, req.params.id, req)) return res.status(404).json({ error: '插件不可用' })
   try {
-    const authed = isAuthed(req) || Boolean(req.query.token && verifyToken(String(req.query.token)))
+    const caller = resolvePluginUser(req, owner.id)
+    const authed = Boolean(caller && (caller.role === 'admin' || caller.id === owner.id))
     const result = await callRoute(owner.id, req.params.id, req.params.name, {
       method: req.method,
       query: req.query,

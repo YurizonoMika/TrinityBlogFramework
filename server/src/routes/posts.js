@@ -3,7 +3,7 @@
 
 import { Router } from 'express'
 import { db } from '../db.js'
-import { requireAuth, isAuthed, can } from '../auth.js'
+import { requireAuth, can, sessionUser } from '../auth.js'
 import { pageUsername } from '../scope.js'
 
 const router = Router()
@@ -21,6 +21,11 @@ function slugify(input) {
     .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '')
   return base || ''
+}
+
+/** Resolve the (optional) viewer of a public route from cookie or Bearer token. */
+function viewer(req) {
+  return sessionUser(req)
 }
 
 function uniqueSlug(desired, excludeId = null) {
@@ -57,12 +62,18 @@ function safeTags(tags) {
 
 router.get('/', (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 200)
-  const all = req.query.all === '1'
+  const me = viewer(req)
+  // `all=1` is admin-only — regular users may only list their *own* drafts
+  const seeAll = req.query.all === '1' && me?.role === 'admin'
+  const selfOnly = Boolean(me) && !seeAll
   const category = (req.query.category || '').trim()
 
   const where = []
   const params = []
-  if (!all) where.push("p.status = 'published'")
+  if (!seeAll) {
+    if (selfOnly) where.push(`(p.status = 'published' OR p.author_id = ?)`), params.push(me.id)
+    else where.push("p.status = 'published'")
+  }
   if (category) {
     where.push('p.category = ?')
     params.push(category)
@@ -99,8 +110,11 @@ const POST_SELECT = `SELECT p.*, u.display_name AS author_name, u.username AS au
 router.get('/:slug', (req, res) => {
   const row = db.prepare(`${POST_SELECT} WHERE p.slug = ?`).get(req.params.slug)
   if (!row) return res.status(404).json({ error: '帖子不存在' })
-  if (row.status !== 'published' && !isAuthed(req)) {
-    return res.status(404).json({ error: '帖子不存在' })
+  // drafts / hidden posts are visible to their author and admins only
+  if (row.status !== 'published') {
+    const me = viewer(req)
+    const allowed = me?.role === 'admin' || (me && me.id === row.author_id)
+    if (!allowed) return res.status(404).json({ error: '帖子不存在' })
   }
   if (row.status === 'published') {
     db.prepare('UPDATE posts SET views = views + 1 WHERE id = ?').run(row.id)

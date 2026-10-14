@@ -32,6 +32,22 @@ function toHex(r, g, b) {
 
 async function loadBuffer(source) {
   if (/^https?:\/\//i.test(source)) {
+    let u
+    try {
+      u = new URL(source)
+    } catch {
+      throw new Error('invalid URL')
+    }
+    if (!/^https?:$/.test(u.protocol)) throw new Error('invalid URL protocol')
+    const host = u.hostname.toLowerCase()
+    const privateHost =
+      host === 'localhost' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      /^(127|0|10|192\.168|169\.254)\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      host === '::1'
+    if (privateHost) throw new Error('invalid URL host')
     const res = await fetch(source, { signal: AbortSignal.timeout(10000) })
     if (!res.ok) throw new Error(`fetch failed ${res.status}`)
     return Buffer.from(await res.arrayBuffer())

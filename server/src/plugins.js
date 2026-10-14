@@ -314,6 +314,31 @@ export function updatePluginState(userId, id, patch) {
 /* sandbox (scoped to the owning user)                                 */
 /* ------------------------------------------------------------------ */
 
+/** Only http(s) to *public* hosts — blocks SSRF to loopback / private networks /
+ *  cloud metadata endpoints. */
+export function assertPublicHttpUrl(url) {
+  let u
+  try {
+    u = new URL(String(url || ''))
+  } catch {
+    throw new Error('无效的 URL')
+  }
+  if (!/^https?:$/.test(u.protocol)) throw new Error('仅允许 http(s) URL')
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) {
+    throw new Error('不允许访问内网地址')
+  }
+  if (/^(127|0|10)\./.test(host) || /^(?:\d+\.)?169\.254\./.test(host)) {
+    throw new Error('不允许访问内网地址')
+  }
+  if (/^192\.168\./.test(host)) throw new Error('不允许访问内网地址')
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) throw new Error('不允许访问内网地址')
+  if (host === '::1' || host.startsWith('::ffff:127.') || host.startsWith('fd') || host.startsWith('fe80')) {
+    throw new Error('不允许访问内网地址')
+  }
+  return u
+}
+
 function buildSandbox(userId, pluginId, manifest, dir, registrations) {
   const permissions = getPluginStates(userId)[pluginId]?.permissions || []
   const api = {
@@ -378,9 +403,12 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
   }
   if (permissions.includes('net:fetch')) {
     api.fetch = (url, options = {}) => {
-      const u = String(url || '')
-      if (!/^https?:\/\//i.test(u)) return Promise.reject(new Error('only http(s) URLs allowed'))
-      return fetch(u, { ...options, signal: AbortSignal.timeout(10000) })
+      try {
+        assertPublicHttpUrl(url)
+      } catch (err) {
+        return Promise.reject(err)
+      }
+      return fetch(String(url), { ...options, signal: AbortSignal.timeout(10000) })
     }
   }
   if (permissions.includes('token')) {
@@ -523,8 +551,8 @@ export function loadAllPlugins() {
 /* runtime access                                                      */
 /* ------------------------------------------------------------------ */
 
-export function getRuntimeManifest(forVisitor, userId) {
-  const key = `${userId}:${forVisitor ? 1 : 0}`
+export function getRuntimeManifest(canSeePrivate, userId) {
+  const key = `${userId}:${canSeePrivate ? 1 : 0}`
   const now = Date.now()
   const cached = runtimeManifestCache.get(key)
   if (cached && now - cached.at < RUNTIME_MANIFEST_TTL) return cached.value
@@ -537,7 +565,8 @@ export function getRuntimeManifest(forVisitor, userId) {
     const id = rk.slice(`${userId}:`.length)
     const state = states[id] || {}
     if (!state.enabled) continue
-    if (forVisitor && !state.visitor) continue
+    // a plugin only runs in the owner's own session unless it is published to visitors
+    if (!canSeePrivate && !state.visitor) continue
     const { manifest, registrations } = entry
     const meta = pluginMeta(userId, id)
     plugins.push({
@@ -582,7 +611,23 @@ export async function callRoute(userId, id, name, req) {
 export function getPluginUi(userId, id) {
   const file = join(pluginDir(userId, id), 'ui.ux')
   if (!existsSync(file)) return null
-  return readFileSync(file, 'utf-8')
+  return sanitizeTemplate(readFileSync(file, 'utf-8'))
+}
+
+/** Mirror of the client-side template filter: strip scripts, event handlers and
+ *  javascript: URLs — used for the plugin's `ui.ux` before it reaches the browser. */
+export function sanitizeTemplate(html) {
+  let out = String(html || '')
+  out = out.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+  out = out.replace(/<script\b[^>]*\/?>/gi, '')
+  // event handlers with single, double or bare quotes
+  out = out.replace(/\s+on[a-zA-Z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/g, '')
+  // javascript: URLs in href / src / action / formaction etc.
+  out = out.replace(
+    /(\s(?:href|src|action|formaction|xlink:href)\s*=\s*)(["'])\s*javascript:[^"']*\2/gi,
+    '$1$2#$2'
+  )
+  return out
 }
 
 export function pluginAssetPath(userId, id, relPath) {

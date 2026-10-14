@@ -74,22 +74,79 @@ export function verifyToken(token) {
 }
 
 export function isAuthed(req) {
+  return Boolean(sessionUser(req))
+}
+
+/* ---------------- session cookie ---------------- */
+
+const SESSION_COOKIE = 'hp_session'
+const FLAG_COOKIE = 'hp_logged_in'
+const COOKIE_MAX_AGE = 7 * 24 * 60 * 60
+
+function parseCookies(header) {
+  const out = {}
+  for (const part of String(header || '').split(';')) {
+    const idx = part.indexOf('=')
+    if (idx < 0) continue
+    const key = part.slice(0, idx).trim()
+    if (key) out[key] = decodeURIComponent(part.slice(idx + 1).trim())
+  }
+  return out
+}
+
+/** Set the HttpOnly session cookie (+ a readable flag cookie for the SPA). */
+export function setSessionCookie(res, token, secure) {
+  const base = `Path=/; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`
+  const sec = secure ? '; Secure' : ''
+  res.append('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; ${base}${sec}`)
+  res.append('Set-Cookie', `${FLAG_COOKIE}=1; ${base}${sec}`)
+}
+
+export function clearSessionCookie(res) {
+  res.append('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`)
+  res.append('Set-Cookie', `${FLAG_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`)
+}
+
+/**
+ * Resolve the logged-in user from the HttpOnly session cookie (preferred) or a
+ * `Authorization: Bearer` header (API clients / plugin share links).
+ */
+export function sessionUser(req) {
+  const cookies = parseCookies(req.headers.cookie)
   const header = req.headers.authorization || ''
-  if (!header.startsWith('Bearer ')) return false
-  return Boolean(verifyToken(header.slice(7)))
+  const token = cookies[SESSION_COOKIE] || (header.startsWith('Bearer ') ? header.slice(7) : null)
+  if (!token) return null
+  const payload = verifyToken(token)
+  if (!payload) return null
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub) || null
+}
+
+/* naive in-memory brute-force guard: 10 attempts per 10 minutes per identity */
+const attemptLog = new Map() // `${ip}|${identity}` -> { count, first }
+const RATE_WINDOW = 10 * 60 * 1000
+const RATE_MAX = 10
+setInterval(() => {
+  const now = Date.now()
+  for (const [key, entry] of attemptLog) {
+    if (now - entry.first > RATE_WINDOW) attemptLog.delete(key)
+  }
+}, RATE_WINDOW).unref?.()
+
+export function allowLoginAttempt(ip, identity) {
+  const key = `${ip}|${String(identity || '').toLowerCase()}`
+  const now = Date.now()
+  let entry = attemptLog.get(key)
+  if (!entry || now - entry.first > RATE_WINDOW) {
+    entry = { count: 0, first: now }
+    attemptLog.set(key, entry)
+  }
+  entry.count += 1
+  return entry.count <= RATE_MAX
 }
 
 export function requireAuth(req, res, next) {
-  const header = req.headers.authorization || ''
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null
-  if (!token) return res.status(401).json({ error: '未登录' })
-  try {
-    const payload = jwt.verify(token, secret())
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.sub)
-    if (!user) return res.status(401).json({ error: '用户不存在' })
-    req.user = user
-    next()
-  } catch {
-    return res.status(401).json({ error: '登录已失效，请重新登录' })
-  }
+  const user = sessionUser(req)
+  if (!user) return res.status(401).json({ error: '未登录' })
+  req.user = user
+  next()
 }

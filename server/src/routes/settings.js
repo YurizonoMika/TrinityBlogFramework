@@ -47,7 +47,7 @@ export function publicProfileFor(user) {
     username: user.username,
     avatar: user.avatar,
     bio: user.bio,
-    email: user.email,
+    // email is private — never exposed on public profiles
     role: user.role,
     links: getUserSetting(user.id, 'links', []),
     tags: getUserSetting(user.id, 'tags', []),

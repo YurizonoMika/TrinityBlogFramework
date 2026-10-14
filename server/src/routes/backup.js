@@ -7,7 +7,7 @@ import AdmZip from 'adm-zip'
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, relative, dirname } from 'node:path'
 import { db, allSettings, setSetting, UPLOAD_DIR, DATA_DIR, migrateLegacyUserData } from '../db.js'
-import { requireAuth } from '../auth.js'
+import { requireAuth, requireAdmin } from '../auth.js'
 import { resetCache } from '../nintendo.js'
 import { PLUGINS_DIR, loadAllPlugins } from '../plugins.js'
 
@@ -20,7 +20,7 @@ const upload = multer({
   limits: { fileSize: 300 * 1024 * 1024 },
 })
 
-router.use(requireAuth)
+router.use(requireAuth, requireAdmin)
 
 router.get('/export', (req, res) => {
   const settings = allSettings()

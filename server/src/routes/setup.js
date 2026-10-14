@@ -3,7 +3,7 @@
 
 import { Router } from 'express'
 import { db, isSetupComplete, seedDefaultCards, setSetting } from '../db.js'
-import { hashPassword, signToken, publicUser } from '../auth.js'
+import { hashPassword, signToken, publicUser, setSessionCookie } from '../auth.js'
 
 const router = Router()
 
@@ -18,6 +18,9 @@ router.post('/', (req, res) => {
   const { username, password, displayName } = req.body || {}
   if (!username || !password) {
     return res.status(400).json({ error: '用户名和密码不能为空' })
+  }
+  if (!/^[A-Za-z0-9_-]{3,32}$/.test(String(username).trim())) {
+    return res.status(400).json({ error: '用户名需为 3-32 位字母、数字、下划线或连字符' })
   }
   if (String(password).length < 6) {
     return res.status(400).json({ error: '密码至少需要 6 位' })
@@ -40,7 +43,8 @@ router.post('/', (req, res) => {
     accent: 'violet',
   })
 
-  res.status(201).json({ token: signToken(user), user: publicUser(user) })
+  setSessionCookie(res, signToken(user), Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https'))
+  res.status(201).json({ user: publicUser(user) })
 })
 
 export default router
