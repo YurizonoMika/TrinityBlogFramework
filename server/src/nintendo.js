@@ -13,15 +13,21 @@ import { DATA_DIR, getSetting, setSetting } from './db.js'
  *
  *  - The remote config (fancy.org.uk) now returns `coral: null`, which disables
  *    direct Coral authentication entirely.
- *  - The bundled config enables Coral but pins an old NSO app version (2.4.0),
- *    while the free imink service currently supports a newer version.
+ *  - The bundled config disables the third-party providers
+ *    (`coral_auth.imink`/`flapg` = null) and always points at the official
+ *    nxapi znca-api proxy.
  *
- * We therefore generate a small local config for nxapi: it keeps Coral enabled,
- * uses the imink provider, and syncs `znca_version` with imink's /config so the
- * version we report to Nintendo matches the version imink generates `f` for.
+ * We therefore generate a small local config: it keeps Coral enabled, enables
+ * the provider selected in the site settings, and syncs `znca_version` with
+ * that provider's /config so the version we report to Nintendo matches the
+ * version used to generate `f`.
  *
- * Override with NXAPI_CONFIG_URL, or set NXAPI_ENABLE_REMOTE_CONFIG=1 to use the
- * remote config instead.
+ * IMPORTANT: nxapi reads this config at module load, so changing the provider
+ * requires a server restart (the `NXAPI_ZNCA_API` env is read dynamically, but
+ * the `coral_auth` allow-list is not).
+ *
+ * Override with a custom config (advanced setting / NXAPI_CONFIG_URL), or set
+ * "use remote config" to fall back to nxapi's own remote config.
  */
 
 const IMINK_CONFIG_URL = 'https://api.imink.app/config'
@@ -76,9 +82,18 @@ function applyNxapiEnv() {
     // a custom nxapi config replaces the remote/bundled selection
     setEnvVar('NXAPI_CONFIG_URL', configUrl)
     delete process.env.NXAPI_ENABLE_REMOTE_CONFIG
-  } else {
+  } else if (remoteConfig) {
+    // use nxapi's own remote config (disables Coral)
     delete process.env.NXAPI_CONFIG_URL
-    setEnvVar('NXAPI_ENABLE_REMOTE_CONFIG', remoteConfig ? '1' : '0')
+    setEnvVar('NXAPI_ENABLE_REMOTE_CONFIG', '1')
+  } else {
+    // default: use our generated config (prepareConfig() sets NXAPI_CONFIG_URL).
+    // Leave NXAPI_ENABLE_REMOTE_CONFIG unset so nxapi loads it in "require"
+    // mode — setting it to '0' would disable remote config entirely and make
+    // nxapi ignore NXAPI_CONFIG_URL, falling back to the bundled config where
+    // imink/flapg are disabled.
+    delete process.env.NXAPI_CONFIG_URL
+    delete process.env.NXAPI_ENABLE_REMOTE_CONFIG
   }
 
   // the local nxapi config depends on the provider URL → rebuild it
@@ -107,11 +122,44 @@ function installedNxapiVersion() {
   }
 }
 
-async function readProviderConfig() {
-  const zncaUrl = process.env.ZNCA_API_URL?.replace(/\/+$/, '')
-  const provider = zncaUrl ? ['nxapi', zncaUrl] : 'imink'
-  const configUrl = zncaUrl ? `${zncaUrl}/config` : IMINK_CONFIG_URL
+/** The provider selected in settings, or an automatic choice based on the URL. */
+function requestedProvider() {
+  const nintendo = (getSetting('integrations', {}) || {}).nintendo || {}
+  const explicit =
+    nintendo.provider === 'imink' || nintendo.provider === 'flapg' ? nintendo.provider : ''
+  const url = String(nintendo.zncaApiUrl || '').trim().replace(/\/+$/, '')
+  if (explicit) return { provider: explicit, url }
+  return { provider: url ? ['nxapi', url] : 'imink', url }
+}
 
+/** `coral.znca_version` from nxapi's bundled config (providers without a /config). */
+function readBundledCoralVersion() {
+  try {
+    const require = createRequire(import.meta.url)
+    const file = join(
+      dirname(require.resolve('nxapi')),
+      '..',
+      '..',
+      'resources',
+      'common',
+      'remote-config.json',
+    )
+    return JSON.parse(readFileSync(file, 'utf-8'))?.coral?.znca_version || null
+  } catch {
+    return null
+  }
+}
+
+async function readProviderConfig() {
+  const { provider, url } = requestedProvider()
+
+  // flapg does not expose a /config endpoint; use the version nxapi ships with.
+  if (provider === 'flapg') {
+    const version = readBundledCoralVersion()
+    return version ? { version, provider } : null
+  }
+
+  const configUrl = provider === 'imink' ? IMINK_CONFIG_URL : `${url}/config`
   try {
     const res = await fetch(configUrl, {
       headers: { 'User-Agent': NXAPI_UA },
@@ -144,7 +192,9 @@ async function prepareConfig() {
         coral_auth: {
           default: info.provider,
           splatnet2statink: null,
-          flapg: null,
+          // keep both third-party providers enabled so switching via the
+          // NXAPI_ZNCA_API env (read on each request) is not blocked
+          flapg: info.provider === 'flapg' ? {} : null,
           imink: {},
         },
         moon: null,
@@ -154,7 +204,7 @@ async function prepareConfig() {
       const file = join(DATA_DIR, 'nxapi-config.json')
       writeFileSync(file, JSON.stringify(config, null, 2))
       process.env.NXAPI_CONFIG_URL = pathToFileURL(file).href
-      const label = Array.isArray(info.provider) ? info.provider[1] : info.provider
+      const label = Array.isArray(info.provider) ? `nxapi ${info.provider[1]}` : info.provider
       console.log(`[nintendo] nxapi config → ${label}, NSO ${info.version}, nxapi ${nxapiVersion}`)
       return
     }
@@ -177,6 +227,46 @@ async function loadCoral() {
     })()
   }
   return modulePromise
+}
+
+/*
+ * nxapi reads its config once, at module load, so changing the provider/NSO
+ * version normally requires a restart. We instead reach into the already-loaded
+ * `remote-config` module (same module instance nxapi uses) and update the parts
+ * that matter, so settings changes apply on the next request without restarting.
+ */
+let remoteConfigModulePromise = null
+
+function loadRemoteConfigModule() {
+  if (!remoteConfigModulePromise) {
+    remoteConfigModulePromise = (async () => {
+      try {
+        const require = createRequire(import.meta.url)
+        const file = join(dirname(require.resolve('nxapi')), '..', 'common', 'remote-config.js')
+        return await import(pathToFileURL(file).href)
+      } catch (err) {
+        console.warn('[nintendo] could not load nxapi config module:', err?.message || err)
+        return null
+      }
+    })()
+  }
+  return remoteConfigModulePromise
+}
+
+async function syncRuntimeConfig() {
+  const mod = await loadRemoteConfigModule()
+  const config = mod?.default
+  if (!config?.coral || !config?.coral_auth) return
+
+  const info = await readProviderConfig()
+  const { provider } = requestedProvider()
+  if (info) config.coral.znca_version = info.version
+  config.coral_auth.default = provider
+  // keep both third-party providers available for live switching
+  config.coral_auth.imink = {}
+  config.coral_auth.flapg = {}
+  const label = Array.isArray(provider) ? `nxapi ${provider[1]}` : provider
+  console.log(`[nintendo] nxapi config → ${label}, NSO ${config.coral.znca_version}`)
 }
 
 function readAuth() {
@@ -311,6 +401,8 @@ async function getCoral() {
 
   if (memoryCoral) return memoryCoral
 
+  await syncRuntimeConfig()
+
   if (auth.coral && auth.coralExpiresAt && auth.coralExpiresAt > Date.now()) {
     memoryCoral = CoralApi.createWithSavedToken(auth.coral)
   } else {
@@ -354,22 +446,44 @@ function normalizeGame(game) {
 
 function friendlyError(err) {
   const msg = String(err?.message || err)
+  const detail = String(err?.data?.error || err?.data?.error_message || err?.data?.error_description || '')
   if (/\[na\] Non-200|session token is invalid|invalid session token/i.test(msg)) {
     return { message: 'Nintendo 会话已失效，请在「用户设置 → 活动集成」中重新绑定账户', code: 'reauth' }
+  }
+  if (/incompatible_client/i.test(detail) || /incompatible_client|coral version/i.test(msg)) {
+    return {
+      message:
+        'nxapi 使用的 NSO 版本与所选服务不兼容。请在「活动集成」保存后稍等片刻（nxapi 会从服务方 /config 同步最新版本），再刷新重试。',
+      code: 'update',
+    }
+  }
+  if (/oauth-protected-resource|well-known|authorisation server|protected resource/i.test(msg)) {
+    return {
+      message:
+        'nxapi 官方代理的客户端认证（OAuth 发现）接口暂时不可用（HTTP 503），与你的配置无关。请稍后重试，或先切换为 imink。',
+      code: 'fgen',
+    }
+  }
+  if (/prevents imink|prevents flapg/i.test(msg)) {
+    return {
+      message: '当前 nxapi 配置禁用了所选的 f 参数生成服务，请在「活动集成」选择可用的提供商并重启服务后重试',
+      code: 'fgen',
+    }
   }
   if (/Missing request authorisation|unauthori[sz]ed|missing.*client|\b401\b/i.test(msg)) {
     return {
       message:
         'nxapi 代理需要客户端身份。请在 https://nxapi-auth.fancy.org.uk/oauth/clients 注册（scope: ca:gf ca:er ca:dr），' +
-        '并将 client id/secret 填入 server/.env 的 NXAPI_ZNCA_API_CLIENT_ID / NXAPI_ZNCA_API_CLIENT_SECRET。',
+        '并在「用户设置 → 活动集成 → Nintendo」填入 client id/secret。',
       code: 'clientsetup',
     }
   }
-  if (/\[imink\]|\[flapg\]|znca api|client authentication|status code 503/i.test(msg)) {
+  if (/\[imink\]|\[flapg\]|\[znca-api\]|znca api|client authentication|status code 503/i.test(msg)) {
     return {
       message:
-        '任天堂 f 参数生成服务当前不可用（imink 的 /f 接口返回 500）。' +
-        '建议改用 nxapi 官方代理：在 server/.env 设置 ZNCA_API_URL 与客户端凭据（见 server/.env.example）。',
+        'f 参数生成服务拒绝了请求' +
+        (detail ? `（${detail}）` : '') +
+        '。请在「用户设置 → 活动集成 → Nintendo」确认代理地址 / Client ID / f 参数生成方式，保存后稍候重试。',
       code: 'fgen',
     }
   }
@@ -430,6 +544,12 @@ export async function getNintendoActivity({ force = false } = {}) {
     writeAuth({ user })
     return value
   } catch (err) {
+    console.warn(
+      '[nintendo] activity error:',
+      String(err?.message || err),
+      err?.data ? JSON.stringify(err.data) : '',
+      err?.response?.status ? `status=${err.response.status}` : '',
+    )
     const { message, code } = friendlyError(err)
     if (code === 'reauth') memoryCoral = null
     return {
