@@ -16,7 +16,7 @@ const page = computed(() => plugin.value?.pages.find((p) => p.id === String(rout
   <div class="plugin-page md-container">
     <template v-if="plugin && page">
       <header class="plugin-page-head">
-        <span class="md-label">PLUGIN</span>
+        <span class="md-label"></span>
         <h1 class="md-headline">{{ page.title }}</h1>
       </header>
       <PluginView :plugin="plugin" kind="page" :id="page.id" :title="page.title" />

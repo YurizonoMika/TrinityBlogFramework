@@ -2,7 +2,7 @@
 <!-- Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika) -->
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import ImageCropper from '@/components/ImageCropper.vue'
@@ -24,7 +24,7 @@ import { loadPlugins } from '@/lib/plugins'
 import type { InstalledPlugin, LinkItem, ProfileTag } from '@/lib/types'
 
 const route = useRoute()
-const validTabs = ['profile', 'site', 'categories', 'activity', 'plugins', 'account', 'backup'] as const
+const validTabs = ['profile', 'site', 'categories', 'activity', 'plugins', 'account', 'storage', 'backup'] as const
 const tab = ref<(typeof validTabs)[number]>(
   validTabs.includes(route.query.tab as any) ? (route.query.tab as any) : 'profile'
 )
@@ -121,6 +121,7 @@ const TABS = [
   { id: 'activity', label: '活动集成', icon: 'history' },
   { id: 'plugins', label: '拓展程序', icon: 'extension' },
   { id: 'account', label: '账户安全', icon: 'lock' },
+  { id: 'storage', label: '存储空间', icon: 'storage' },
   { id: 'backup', label: '备份与迁移', icon: 'save' },
 ] as const
 
@@ -175,6 +176,122 @@ async function loadNintendoStatus() {
     nintendoStatus.loading = false
   }
 }
+
+/* ---------------- storage ---------------- */
+
+interface StorageCategory {
+  bytes: number
+  files?: number
+  detail?: Record<string, number>
+}
+interface StorageOverview {
+  disk: { total: number; used: number; free: number }
+  site: { bytes: number; parts: { id: string; label: string; bytes: number }[] }
+  uploads: { total: number; referenced: number; orphan: number; orphanCount: number }
+  categories: {
+    posts: StorageCategory
+    moments: StorageCategory
+    system: StorageCategory
+    plugins: { id: string; name: string; enabled: boolean; bytes: number; files: number }[]
+  }
+}
+
+const storage = ref<StorageOverview | null>(null)
+const storageLoading = ref(false)
+
+function fmtBytes(bytes: number): string {
+  const n = Number(bytes) || 0
+  if (n < 1024) return `${n} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = n / 1024
+  let i = 0
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024
+    i++
+  }
+  return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[i]}`
+}
+function storagePct(part: number, total: number): number {
+  return total ? Math.min(100, (part / total) * 100) : 0
+}
+
+async function loadStorage() {
+  storageLoading.value = true
+  try {
+    storage.value = await api<StorageOverview>('/settings/storage')
+  } catch (e: any) {
+    notify(e.message || '读取存储信息失败', 'error')
+  } finally {
+    storageLoading.value = false
+  }
+}
+
+async function cleanOrphans() {
+  const ok = await confirmDialog({
+    title: '清理孤立文件',
+    message: '删除未被任何帖子 / 动态 / 站点素材引用的上传文件？该操作不可撤销。',
+    confirmText: '清理',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    const r = await api<{ removed: number; bytes: number; storage: StorageOverview }>(
+      '/settings/storage/clean-orphans',
+      { method: 'POST' }
+    )
+    storage.value = r.storage
+    notify(`已清理 ${r.removed} 个文件，释放 ${fmtBytes(r.bytes)}`, 'success')
+  } catch (e: any) {
+    notify(e.message || '清理失败', 'error')
+  }
+}
+
+async function vacuumDb() {
+  const ok = await confirmDialog({
+    title: '整理数据库',
+    message: '对数据库执行 VACUUM 以回收空间？大站可能耗时较久。',
+    confirmText: '整理',
+  })
+  if (!ok) return
+  try {
+    const r = await api<{ before: number; after: number; storage: StorageOverview }>(
+      '/settings/storage/vacuum',
+      { method: 'POST' }
+    )
+    storage.value = r.storage
+    notify(`数据库已整理，回收 ${fmtBytes(Math.max(0, r.before - r.after))}`, 'success')
+  } catch (e: any) {
+    notify(e.message || '整理失败', 'error')
+  }
+}
+
+async function clearPluginStorage(id: string, name: string) {
+  const ok = await confirmDialog({
+    title: '清空插件存储',
+    message: `删除插件「${name}」的全部存储文件？其上传的内容将丢失。`,
+    confirmText: '清空',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    const r = await api<{ removed: number; bytes: number; storage: StorageOverview }>(
+      `/settings/storage/plugin/${encodeURIComponent(id)}/clear`,
+      { method: 'POST' }
+    )
+    storage.value = r.storage
+    notify(`已清空「${name}」，释放 ${fmtBytes(r.bytes)}`, 'success')
+  } catch (e: any) {
+    notify(e.message || '清空失败', 'error')
+  }
+}
+
+watch(
+  tab,
+  (t) => {
+    if (t === 'storage' && !storage.value) loadStorage()
+  },
+  { immediate: true }
+)
 
 async function startNintendoAuth() {
   naAuth.busy = true
@@ -736,11 +853,11 @@ const PERMISSION_LABELS: Record<string, string> = {
           </div>
 
           <div class="sub-head">
-            <span class="mini-label">首页标签（显示在大头像旁）</span>
+            <span class="mini-label">标签</span>
             <button class="btn btn-outlined btn-sm" @click="addTag"><AppIcon name="add" :size="15" />添加</button>
           </div>
           <p class="md-muted tiny" style="margin-bottom: 10px">
-            可自定义标签文字与图标，用于展示你的身份或兴趣。
+            自定义标签文字与图标，展示你的身份或兴趣。
           </p>
           <div v-for="(tag, i) in profileTags" :key="i" class="link-row">
             <input v-model="tag.label" class="mini-input grow" placeholder="标签文字，如 开发者" />
@@ -835,7 +952,7 @@ const PERMISSION_LABELS: Record<string, string> = {
 
           <template v-else>
             <p class="md-muted tiny" style="margin-bottom: 12px">
-              使用 Material You 动态取色：从图片中提取种子色，自动生成整套 Material You 配色（浅色 / 深色）。
+              使用 Material You 动态取色
             </p>
             <div class="segmented scheme-seg">
               <button :class="{ active: themeSource === 'icon' }" @click="setThemeSource('icon')">
@@ -866,7 +983,7 @@ const PERMISSION_LABELS: Record<string, string> = {
                   placeholder=" "
                   @change="applySeedUrl"
                 />
-                <span class="field-label">或粘贴图片链接（例如某篇文章的封面）</span>
+                <span class="field-label">或粘贴图片链接</span>
               </label>
             </template>
             <p v-else class="md-muted tiny" style="margin: 4px 0 0">
@@ -897,7 +1014,7 @@ const PERMISSION_LABELS: Record<string, string> = {
         <section v-show="tab === 'categories'" class="card">
           <h2 class="panel-title">博客分类</h2>
           <p class="md-muted panel-hint">
-            用于博客列表筛选。发布文章时可从这些分类中选择；标签仅用于搜索，不参与筛选。
+            用于博客列表筛选
           </p>
 
           <div class="sub-head">
@@ -910,7 +1027,7 @@ const PERMISSION_LABELS: Record<string, string> = {
             <input v-model="categories[i]" class="mini-input grow" placeholder="分类名称，如 随笔" />
             <button class="icon-btn sm" @click="removeCategory(i)"><AppIcon name="close" :size="16" /></button>
           </div>
-          <p v-if="!categories.length" class="md-muted tiny">还没有分类，点「添加分类」创建。</p>
+          <p v-if="!categories.length" class="md-muted tiny">还没有分类，请点击“添加分类“创建。</p>
 
           <div class="panel-actions">
             <button class="btn btn-filled" :disabled="saving" @click="saveCategoriesList">
@@ -923,7 +1040,7 @@ const PERMISSION_LABELS: Record<string, string> = {
         <section v-show="tab === 'activity'" class="card">
           <h2 class="panel-title">活动集成</h2>
           <p class="md-muted panel-hint">
-            填写后将自动在首页「个人活动」卡片中展示。未填写时显示占位状态。
+            填写后将自动在首页“个人活动“卡片中展示。未填写时显示占位状态。
           </p>
 
           <div class="integration">
@@ -996,12 +1113,11 @@ const PERMISSION_LABELS: Record<string, string> = {
 
             <template v-else>
               <p class="md-muted panel-hint">
-                绑定 Nintendo 账户后可实时获取好友在线状态、正在游玩的游戏与累计游玩时长。凭据仅保存在本地服务器的数据库中。
+                绑定 Nintendo 账户后可实时获取好友在线状态、正在游玩的游戏与累计游玩时长。
               </p>
               <ol class="nso-steps">
                 <li>点击「绑定 Nintendo 账户」，在打开的任天堂登录页完成登录。</li>
-                <li>登录后会跳转到一个以 <code>npf...</code> 开头的页面（浏览器可能提示无法打开，属正常）。</li>
-                <li>复制地址栏中的完整链接，粘贴到下方输入框并点击「完成绑定」。</li>
+                <li>登录后右键“选择此人“按钮，复制链接将会得到 <code>npf...</code> 开头的链接，粘贴至输入框即可</li>
               </ol>
               <div class="nso-actions">
                 <button class="btn btn-tonal btn-sm" :disabled="naAuth.busy" @click="startNintendoAuth">
@@ -1049,7 +1165,7 @@ const PERMISSION_LABELS: Record<string, string> = {
               </a>
             </div>
             <p class="md-muted tiny" style="margin: 0 0 12px">
-              实时读取 NSO 数据需要 nxapi 代理的客户端凭据。填写后首页活动卡与「Switch 游戏库」才能获取数据。
+              推荐使用 nxapi 官方代理：填写下方代理地址与你注册的 Client ID（Client Secret 可留空），并把“f 参数生成方式“设为“自动“。保存后需重启服务端。
             </p>
             <label class="field filled">
               <input v-model="nintendo.zncaApiUrl" class="field-input" placeholder=" " />
@@ -1078,6 +1194,9 @@ const PERMISSION_LABELS: Record<string, string> = {
               </select>
               <span class="field-label">f 参数生成方式</span>
             </label>
+            <p class="md-muted tiny" style="margin: -8px 0 12px">
+              切换后需重启服务端生效（nxapi 在启动时读取配置）。“自动“= 填了代理地址就用官方代理，否则用 imink。
+            </p>
             <div class="theme-row" style="margin: 8px 0 18px">
               <span class="mini-label" style="margin: 0">
                 使用 nxapi 远程配置（会禁用直连认证，一般保持关闭）
@@ -1104,8 +1223,7 @@ const PERMISSION_LABELS: Record<string, string> = {
         <section v-show="tab === 'plugins'" class="card">
           <h2 class="panel-title">拓展程序</h2>
           <p class="md-muted panel-hint">
-            导入 ZIP 插件包（含 <code>plugin.json</code>、<code>app.js</code>，可选
-            <code>ui.ux</code> 与 <code>sources/</code>）。可启用/禁用、管理权限，并决定是否对访客开放。
+            导入 ZIP 插件包
           </p>
 
           <div class="plugin-import">
@@ -1166,7 +1284,7 @@ const PERMISSION_LABELS: Record<string, string> = {
             </div>
 
             <div
-              v-if="p.loaded && (p.widgets.length || p.pages.length || p.postModules.length || p.overlays.length)"
+              v-if="p.loaded && (p.widgets.length || p.pages.length || p.postModules.length || p.overlays.length || p.topbars?.length)"
               class="plugin-contrib"
             >
               <span class="mini-label">提供的内容</span>
@@ -1196,6 +1314,12 @@ const PERMISSION_LABELS: Record<string, string> = {
                 <span class="contrib-label">叠加层</span>
                 <span v-for="o in p.overlays" :key="o.id" class="chip static">
                   叠加层 · {{ o.id }}
+                </span>
+              </div>
+              <div v-if="p.topbars?.length" class="contrib-row">
+                <span class="contrib-label">顶栏</span>
+                <span v-for="tb in p.topbars" :key="tb.id" class="chip static">
+                  顶栏 · {{ tb.title }}
                 </span>
               </div>
               <div v-if="p.postModules.length" class="contrib-row">
@@ -1238,11 +1362,108 @@ const PERMISSION_LABELS: Record<string, string> = {
           </div>
         </section>
 
+        <!-- storage -->
+        <section v-show="tab === 'storage'" class="card">
+          <h2 class="panel-title">存储空间</h2>
+          <p class="md-muted panel-hint">查看服务器磁盘与本站各类数据的占用，并清理不需要的空间。</p>
+
+          <div v-if="storageLoading || !storage" class="skeleton" style="height: 160px; border-radius: 20px" />
+          <template v-else>
+            <div class="storage-block">
+              <div class="storage-row-head">
+                <span class="mini-label">服务器磁盘</span>
+                <span class="md-muted">
+                  已用 {{ fmtBytes(storage.disk.used) }} / {{ fmtBytes(storage.disk.total) }} · 剩余
+                  {{ fmtBytes(storage.disk.free) }}
+                </span>
+              </div>
+              <div class="storage-bar">
+                <div class="storage-bar-fill" :style="{ width: storagePct(storage.disk.used, storage.disk.total) + '%' }" />
+              </div>
+            </div>
+
+            <div class="storage-block">
+              <div class="storage-row-head">
+                <span class="mini-label">站点占用</span>
+                <strong>{{ fmtBytes(storage.site.bytes) }}</strong>
+              </div>
+              <div class="storage-parts">
+                <div v-for="part in storage.site.parts" :key="part.id" class="storage-part">
+                  <span>{{ part.label }}</span>
+                  <span class="md-muted">{{ fmtBytes(part.bytes) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sub-head"><span class="mini-label">分类占用</span></div>
+            <div class="storage-cats">
+              <div class="storage-cat">
+                <span class="sc-icon"><AppIcon name="article" :size="18" /></span>
+                <div class="sc-main">
+                  <strong>帖子</strong>
+                  <span class="md-muted">图片 {{ storage.categories.posts.files || 0 }} 个</span>
+                </div>
+                <span class="sc-size">{{ fmtBytes(storage.categories.posts.bytes) }}</span>
+              </div>
+              <div class="storage-cat">
+                <span class="sc-icon"><AppIcon name="chat" :size="18" /></span>
+                <div class="sc-main">
+                  <strong>动态</strong>
+                  <span class="md-muted">图片 {{ storage.categories.moments.files || 0 }} 个</span>
+                </div>
+                <span class="sc-size">{{ fmtBytes(storage.categories.moments.bytes) }}</span>
+              </div>
+              <div class="storage-cat">
+                <span class="sc-icon"><AppIcon name="settings" :size="18" /></span>
+                <div class="sc-main">
+                  <strong>站点系统</strong>
+                  <span class="md-muted">数据库与站点素材</span>
+                </div>
+                <span class="sc-size">{{ fmtBytes(storage.categories.system.bytes) }}</span>
+              </div>
+            </div>
+
+            <div class="storage-block">
+              <div class="storage-row-head">
+                <span class="mini-label">插件</span>
+                <span class="md-muted">{{ storage.categories.plugins.length }} 个</span>
+              </div>
+              <div v-for="p in storage.categories.plugins" :key="p.id" class="storage-plugin">
+                <div class="sc-main">
+                  <strong>{{ p.name }}</strong>
+                  <span class="md-muted">{{ p.files }} 个文件 · {{ p.enabled ? '已启用' : '已停用' }}</span>
+                </div>
+                <span class="sc-size">{{ fmtBytes(p.bytes) }}</span>
+                <button class="btn btn-danger btn-sm" :disabled="!p.bytes" @click="clearPluginStorage(p.id, p.name)">
+                  清空
+                </button>
+              </div>
+              <p v-if="!storage.categories.plugins.length" class="md-muted tiny">还没有安装插件。</p>
+            </div>
+
+            <p class="md-muted tiny" style="margin-top: 4px">
+              孤立文件：{{ storage.uploads.orphanCount || 0 }} 个（{{ fmtBytes(storage.uploads.orphan) }}），可一并清理。
+            </p>
+
+            <div class="panel-actions">
+              <button class="btn btn-outlined" @click="loadStorage">
+                <AppIcon name="refresh" :size="16" />刷新
+              </button>
+              <button class="btn btn-outlined" @click="cleanOrphans">
+                <AppIcon name="delete" :size="16" />清理孤立文件
+              </button>
+              <button class="btn btn-outlined" @click="vacuumDb">
+                <AppIcon name="storage" :size="16" />整理数据库
+              </button>
+            </div>
+          </template>
+        </section>
+
         <!-- backup -->
         <section v-show="tab === 'backup'" class="card">
           <h2 class="panel-title">备份与迁移</h2>
           <p class="md-muted panel-hint">
-            将整个站点的数据导出为一个 ZIP 文件，在另一个使用相同软件的站点导入即可完成迁移。
+            将整个站点的数据导出为一个 ZIP 文件
           </p>
 
           <div
@@ -1722,5 +1943,100 @@ const PERMISSION_LABELS: Record<string, string> = {
   .form-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---------------- storage ---------------- */
+.storage-block {
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--md-surface-container-low);
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 45%, transparent);
+  margin-bottom: 14px;
+}
+.storage-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.storage-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--md-surface-container-highest);
+  overflow: hidden;
+}
+.storage-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--md-primary), var(--md-tertiary));
+  transition: width var(--md-dur-long) var(--md-ease-emphasized);
+}
+.storage-parts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px 18px;
+}
+.storage-part {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.86rem;
+  padding: 4px 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--md-outline-variant) 40%, transparent);
+}
+.storage-cats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.storage-cat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--md-surface-container-high);
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 45%, transparent);
+}
+.sc-icon {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+}
+.sc-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sc-main strong {
+  font-size: 0.9rem;
+}
+.sc-main span {
+  font-size: 0.74rem;
+}
+.sc-size {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.storage-plugin {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--md-outline-variant) 40%, transparent);
+}
+.storage-plugin:first-of-type {
+  border-top: none;
 }
 </style>

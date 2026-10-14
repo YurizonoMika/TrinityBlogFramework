@@ -6,6 +6,12 @@ import { db, getSetting, setSetting } from '../db.js'
 import { requireAuth, hashPassword, verifyPassword, publicUser } from '../auth.js'
 import { extractSeedColor, resolveThemeSource } from '../seed.js'
 import { resetNintendoConfig } from '../nintendo.js'
+import {
+  getStorageOverview,
+  cleanOrphanUploads,
+  clearPluginStorage,
+  vacuumDatabase,
+} from '../storage.js'
 
 const router = Router()
 
@@ -143,6 +149,31 @@ router.put('/account', requireAuth, (req, res) => {
   )
   const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)
   res.json({ profile: publicUser(updated) })
+})
+
+/* ---------------- storage ---------------- */
+
+router.get('/storage', requireAuth, (req, res) => {
+  res.json(getStorageOverview())
+})
+
+router.post('/storage/clean-orphans', requireAuth, (req, res) => {
+  const result = cleanOrphanUploads()
+  res.json({ ...result, storage: getStorageOverview() })
+})
+
+router.post('/storage/vacuum', requireAuth, (req, res) => {
+  const result = vacuumDatabase()
+  res.json({ ...result, storage: getStorageOverview() })
+})
+
+router.post('/storage/plugin/:id/clear', requireAuth, (req, res) => {
+  try {
+    const result = clearPluginStorage(req.params.id)
+    res.json({ ...result, storage: getStorageOverview() })
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) })
+  }
 })
 
 export default router
