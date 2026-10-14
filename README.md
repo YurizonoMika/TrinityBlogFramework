@@ -128,7 +128,9 @@ npm start                # 启动后端（同时托管前端与上传文件）
 
 ## 🧩 插件系统
 
-插件为 ZIP 包，可由管理员在「用户设置 → 拓展程序」导入、启用/禁用、设置访客可见性与权限。插件可提供：帖子内嵌模块、编辑器小工具、Widgets、页面叠加层、独立页面、卡片数据源。
+> 📘 完整开发指南见 **[`docs/plugin-guide.md`](./docs/plugin-guide.md)**。
+
+插件为 ZIP 包，可由**管理员**在「用户设置 → 拓展程序」导入、启用/禁用、设置访客可见性与权限。插件可提供：帖子内嵌模块、编辑器小工具、Widgets、页面叠加层、独立页面、卡片数据源。插件按用户安装与隔离，未对访客开放的插件仅在其所属用户本人的会话中运行。
 
 ### 插件包结构
 
@@ -189,25 +191,27 @@ plugin.registerOverlay({ id: 'badge', pages: ['*'] })
 
 ### `ui.ux` / `ui.js`（前端）
 
-- `ui.ux`：HTML 模板，可含 `<style>`，渲染在独立 **shadow root** 内；站点 CSS 变量（`--md-*`）自动继承，因此**跟随主题与动态取色**；支持 `{{ path }}` 插值。
-- `ui.js`：ES 模块，导出 `mount(ctx)`，`ctx = { pluginId, kind, id, root, host, api }`。
+- `ui.ux`：HTML 模板，可含 `<style>`，渲染在独立 **shadow root** 内；站点 CSS 变量（`--md-*`）自动继承，因此**跟随主题与动态取色**；支持 `{{ path }}` 插值，且会被清洗（移除脚本 / 事件属性 / `javascript:`）。
+- `ui.js`：ES 模块，导出 `mount(ctx)`，可选返回清理函数。`ctx = { pluginId, kind, id, root, host, owner, api }`。
 
 客户端 `api`：
 
 ```js
-api.isAdmin                       // 当前访问者是否管理员
+api.isAdmin                       // 当前访问者是否已登录
+api.dialog.confirm/alert(opts)    // M3 全局对话框
 api.call(route, { method, body }) // 调用 registerRoute 注册的接口
 api.data(source, query)           // 读取 registerCardSource 注册的数据源
-api.storage.url(name)             // 存储文件 URL（自动附 token）
-api.storage.list() / upload(files) / remove(name) / removeBefore(date)
+api.storage.url(name)             // 存储文件 URL（同源 Cookie 鉴权，可直接用于 <img>/<audio>）
+api.storage.list() / upload(files) / replace(name, file) / remove(name) / removeBefore(date)
 ```
 
 ### 安全模型
 
-- `app.js` 在沙箱中执行（无文件/进程访问，拥有超时限制）
-- 敏感能力需管理员逐项授权
-- 「对访客开放」控制访客可见性；未开放的插件接口对访客返回 404
-- 受门禁的插件资源支持 `?token=` 查询参数鉴权（供 `<img>` 等场景）
+- `app.js` 在 Node `vm` 沙箱中执行（无 `require`/`process`，带超时）；**注意 `vm` 并非强隔离边界**，仅应由可信管理员安装/启用插件。
+- **导入 / 启用 / 对访客公开：仅管理员。** 普通用户不能自行运行或发布插件代码。
+- **私有与公开隔离**：未对访客开放的插件只在其所属用户本人的会话中渲染；管理员或访客访问 `/user/某用户` 时只加载其已公开的插件。
+- 敏感能力（`storage` / `net:fetch` / `token` / `posts:read` / `moments:read` / `settings:read`）需管理员逐项授权。
+- 站点启用严格 CSP（`script-src 'self'`、`connect-src 'self'`），插件前端不得直连第三方，需经服务端 `plugin.fetch`（`net:fetch`，已阻断内网/元数据地址）。
 
 ## 💾 备份与迁移
 
