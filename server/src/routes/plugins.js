@@ -33,8 +33,24 @@ const router = Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } })
 const storageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 80 * 1024 * 1024, files: 30 } })
 
-/** Resolve the user whose plugins this request targets (defaults to the site owner). */
+/**
+ * Resolve the user whose plugins this request targets.
+ *
+ * Account isolation: an authenticated request is ALWAYS scoped to the session
+ * user (only admins may target another user with `?username=`). Anonymous
+ * requests may render a page owner's `visitor` plugins (via `?username=` or the
+ * referer), otherwise they fall back to the site owner.
+ * This guarantees a plugin can never read another user's storage/data.
+ */
 function ownerFrom(req) {
+  const viewer = sessionUser(req)
+  if (viewer) {
+    if (viewer.role === 'admin' && req.query.username) {
+      const u = db.prepare('SELECT * FROM users WHERE username = ?').get(String(req.query.username))
+      if (u) return u
+    }
+    return viewer
+  }
   const username = pageUsername(req)
   if (username) {
     const u = db.prepare('SELECT * FROM users WHERE username = ?').get(String(username))
