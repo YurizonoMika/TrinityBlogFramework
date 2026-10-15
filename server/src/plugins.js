@@ -376,6 +376,13 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
     registerPage(def) {
       registrations.pages.push({ id: String(def.id || 'index'), title: def.title || manifest.name, icon: def.icon || 'extension' })
     },
+    registerSettings(def) {
+      registrations.settings.push({
+        id: String(def.id || 'settings'),
+        title: def.title || manifest.name,
+        icon: def.icon || 'settings',
+      })
+    },
     registerWidget(def) {
       registrations.widgets.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
     },
@@ -389,7 +396,12 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
       registrations.postModules.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
     },
     registerEditorTool(def) {
-      registrations.editorTools.push({ id: String(def.id || 'main'), label: def.label || manifest.name, icon: def.icon || 'extension' })
+      registrations.editorTools.push({
+        id: String(def.id || 'main'),
+        label: def.label || manifest.name,
+        icon: def.icon || 'extension',
+        ui: def.ui === true,
+      })
     },
   }
 
@@ -434,34 +446,78 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
     api.token = (getUserSetting(userId, 'plugin_tokens', {}) || {})[pluginId] || ''
   }
   if (permissions.includes('storage')) {
-    const dir = pluginStorageDir(userId, pluginId)
-    api.storage = {
-      list: () => listPluginStorage(userId, pluginId),
-      stats: () => pluginStorageStats(userId, pluginId),
-      read: (name) => readFileSync(join(dir, safeName(name)), 'utf-8'),
-      write: (name, data) => {
-        writeFileSync(join(dir, safeName(name)), data)
-        return true
-      },
-      remove: (name) => {
-        rmSync(join(dir, safeName(name)), { force: true })
-        return true
-      },
-      readJSON: (name, fallback = null) => {
-        try {
-          return JSON.parse(readFileSync(join(dir, safeName(name)), 'utf-8'))
-        } catch {
-          return fallback
-        }
-      },
-      writeJSON: (name, obj) => {
-        writeFileSync(join(dir, safeName(name)), JSON.stringify(obj, null, 2))
-        return true
-      },
-      url: (name) => `/api/plugins/${pluginId}/storage/${encodeURIComponent(safeName(name))}?username=${encodeURIComponent(usernameOf(userId))}`,
-    }
+    api.storage = storageApiFor(userId, pluginId)
+    api.shared = sharedApiFor(pluginId)
   }
   return { plugin: api, console: { log: api.log, error: api.log, warn: api.log } }
+}
+
+/** Site-wide (shared across all users/visitors) JSON store for a plugin:
+ *  `DATA_DIR/plugin-data/<pluginId>/`. Used by plugins whose data is global,
+ *  e.g. interactive forms where any visitor submits to the form's owner. */
+function sharedApiFor(pluginId) {
+  const dir = join(DATA_DIR, 'plugin-data', pluginId)
+  mkdirSync(dir, { recursive: true })
+  const list = () =>
+    readdirSync(dir)
+      .filter((n) => !n.startsWith('.'))
+      .map((name) => {
+        const st = statSync(join(dir, name))
+        return { name, size: st.size, mtime: st.mtimeMs }
+      })
+  return {
+    list,
+    read: (name) => readFileSync(join(dir, safeName(name)), 'utf-8'),
+    write: (name, data) => {
+      writeFileSync(join(dir, safeName(name)), data)
+      return true
+    },
+    remove: (name) => {
+      rmSync(join(dir, safeName(name)), { force: true })
+      return true
+    },
+    readJSON: (name, fallback = null) => {
+      try {
+        return JSON.parse(readFileSync(join(dir, safeName(name)), 'utf-8'))
+      } catch {
+        return fallback
+      }
+    },
+    writeJSON: (name, obj) => {
+      writeFileSync(join(dir, safeName(name)), JSON.stringify(obj, null, 2))
+      return true
+    },
+  }
+}
+
+/** The storage API bound to a specific user + plugin (also used by admin cross-user reads). */
+function storageApiFor(userId, pluginId) {
+  const dir = pluginStorageDir(userId, pluginId)
+  return {
+    list: () => listPluginStorage(userId, pluginId),
+    stats: () => pluginStorageStats(userId, pluginId),
+    read: (name) => readFileSync(join(dir, safeName(name)), 'utf-8'),
+    write: (name, data) => {
+      writeFileSync(join(dir, safeName(name)), data)
+      return true
+    },
+    remove: (name) => {
+      rmSync(join(dir, safeName(name)), { force: true })
+      return true
+    },
+    readJSON: (name, fallback = null) => {
+      try {
+        return JSON.parse(readFileSync(join(dir, safeName(name)), 'utf-8'))
+      } catch {
+        return fallback
+      }
+    },
+    writeJSON: (name, obj) => {
+      writeFileSync(join(dir, safeName(name)), JSON.stringify(obj, null, 2))
+      return true
+    },
+    url: (name) => `/api/plugins/${pluginId}/storage/${encodeURIComponent(safeName(name))}?username=${encodeURIComponent(usernameOf(userId))}`,
+  }
 }
 
 function loadPlugin(userId, id) {
@@ -472,7 +528,7 @@ function loadPlugin(userId, id) {
   const appPath = join(dir, 'app.js')
   if (!existsSync(appPath)) return markError(userId, id, 'app.js 缺失')
 
-  const registrations = { routes: {}, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], postModules: [], editorTools: [] }
+  const registrations = { routes: {}, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], postModules: [], editorTools: [], settings: [] }
   try {
     const sandbox = buildSandbox(userId, id, manifest, dir, registrations)
     const context = vm.createContext(sandbox)
@@ -599,6 +655,7 @@ export function getRuntimeManifest(canSeePrivate, userId) {
       assetBase: `/api/plugins/${id}/asset`,
       capabilities: manifest.capabilities || {},
       pages: registrations.pages,
+      settings: registrations.settings,
       widgets: registrations.widgets,
       overlays: registrations.overlays,
       topbars: registrations.topbars,

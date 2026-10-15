@@ -266,6 +266,8 @@ async function handleCall(req, res) {
       body: req.body,
       path: req.path,
       authed,
+      isAdmin: Boolean(caller && caller.role === 'admin'),
+      viewer: caller ? { id: caller.id, username: caller.username } : null,
     })
     if (result === undefined || result === null) return res.json({ ok: true })
     res.json({ data: result })

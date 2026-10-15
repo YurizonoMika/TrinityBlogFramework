@@ -5,7 +5,7 @@ import { statfsSync, readdirSync, statSync, existsSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DATA_DIR, UPLOAD_DIR, db, getSetting, primaryUserId } from './db.js'
-import { listPlugins, pluginStorageDir, listPluginStorage } from './plugins.js'
+import { listPlugins, pluginStorageDir, listPluginStorage, pluginDir } from './plugins.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SERVER_DIR = join(__dirname, '..')
@@ -153,18 +153,17 @@ function sumByPath(files, names) {
   return { bytes, count }
 }
 
-/** Per-user plugin code+storage bytes, and the full plugin list. */
+/** Per-user plugin disk usage (code + storage), and the full plugin list
+ *  (every installed plugin, even with zero stored files). */
 function pluginUsage(usersRows) {
   const per = new Map()
   const list = []
   for (const u of usersRows) {
     for (const p of listPlugins(u.id)) {
       const files = listPluginStorage(u.id, p.id)
-      const bytes = files.reduce((s, f) => s + (f.size || 0), 0)
-      if (bytes) {
-        list.push({ id: p.id, name: p.name, owner: u.username, bytes, files: files.length, enabled: p.enabled })
-        per.set(u.id, (per.get(u.id) || 0) + bytes)
-      }
+      const bytes = dirSize(pluginDir(u.id, p.id))
+      list.push({ id: p.id, name: p.name, owner: u.username, bytes, files: files.length, enabled: p.enabled })
+      per.set(u.id, (per.get(u.id) || 0) + bytes)
     }
   }
   list.sort((a, b) => b.bytes - a.bytes)
