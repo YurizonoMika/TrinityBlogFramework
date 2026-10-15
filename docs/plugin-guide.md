@@ -112,7 +112,7 @@ my-plugin/
 
 | 权限 | 授予的能力 |
 |---|---|
-| `storage` | 服务端 `plugin.storage.*`（读写插件私有存储） |
+| `storage` | 服务端 `plugin.storage.*`（按用户私有）与 `plugin.shared.*`（站点级共享） |
 | `net:fetch` | 服务端 `plugin.fetch()` 发起外部 HTTP(S) 请求 |
 | `token` | 服务端 `plugin.token`（管理员为该插件填写的访问令牌） |
 | `posts:read` | 服务端 `plugin.getPosts()` 读取该用户的帖子 |
@@ -133,10 +133,11 @@ plugin.registerRoute(name, handler)          // 自定义接口 → 前端 api.c
 plugin.registerCardSource(id, handler)       // 数据源 → 前端 api.data(id)
 plugin.registerWidget({ id, title })         // 首页小组件
 plugin.registerPage({ id, title, icon })     // 独立页面 /p/<pluginId>/<id>
+plugin.registerSettings({ id, title, icon }) // 在「用户设置」侧栏添加一个设置项（kind='settings'）
 plugin.registerOverlay({ id, pages })        // 页面叠加层，pages: ['home','blog',...] 或 ['*']
 plugin.registerTopbar({ id, title })         // 顶栏中央插槽
 plugin.registerPostModule({ id, title })     // 帖子内嵌模块
-plugin.registerEditorTool({ id, label, icon })// 编辑器工具栏按钮
+plugin.registerEditorTool({ id, label, icon, ui })// 编辑器工具栏按钮（ui:true 时点击弹出插件浮窗）
 ```
 
 `handler` 签名：
@@ -184,7 +185,13 @@ plugin.token                                    // 管理员填写的令牌字�
 // storage（见「存储」一节）
 plugin.storage.list() / stats() / read(name) / write(name, data)
 plugin.storage.remove(name) / readJSON(name, fallback) / writeJSON(name, obj) / url(name)
+// shared：站点级共享存储（同一插件的所有用户/访客共享，无需 url）
+plugin.shared.list() / read(name) / write(name, data) / remove(name)
+plugin.shared.readJSON(name, fallback) / writeJSON(name, obj)
 ```
+
+> `plugin.storage` 按用户隔离（`DATA_DIR/users/<id>/plugins/<pid>/storage/`）；`plugin.shared`
+> 是**整站共享**（`DATA_DIR/plugin-data/<pid>/`），适合表单数据这类需要跨用户/访客聚合的场景。
 
 > `plugin.fetch` 会拒绝 `localhost`、内网网段、`169.254.*`（云元数据）等地址，并强制 10s 超时。
 
@@ -211,7 +218,8 @@ plugin.storage.remove(name) / readJSON(name, fallback) / writeJSON(name, obj) / 
 
 ### `ui.js`（逻辑）
 
-ES 模块，导出 `mount(ctx)`；可选返回一个清理函数（组件卸载时调用）。
+ES 模块，导出 `mount(ctx)`；可选返回一个清理函数（组件卸载时调用）。当 `kind === 'editor-tool'`
+时 `ctx.api.editor` 提供 `insert(text)`（在编辑器光标处插入）与 `close()`（关闭弹窗）。
 
 ```js
 export function mount(ctx) {
@@ -229,17 +237,19 @@ export function mount(ctx) {
 | 字段 | 说明 |
 |---|---|
 | `pluginId` | 插件 id |
-| `kind` | `widget` / `page` / `module` / `overlay` / `topbar` |
-| `id` | 当前小组件 / 页面 / 模块 / 叠加层 / 顶栏的 id |
+| `kind` | `widget` / `page` / `module` / `overlay` / `topbar` / `editor-tool` / `settings` |
+| `id` | 当前小组件 / 页面 / 模块 / 叠加层 / 顶栏 / 编辑器工具 / 设置项的 id |
 | `root` | shadow root（用 `root.querySelector`） |
 | `host` | 外层宿主元素 |
 | `owner` | 该页面所属用户名（用于跨用户场景） |
+| `data` | 帖子模块的 marker 参数（`[[plugin:id/mod\|{...}]]` 里的 JSON 对象） |
 | `api` | 客户端 API（见下） |
 
 客户端 `api`：
 
 ```js
 api.isAdmin                              // 当前访问者是否已登录（注意：仅表示已登录）
+api.editor.insert(text) / close()        // 仅 kind='editor-tool'：插入编辑器 / 关闭弹窗
 api.dialog.confirm(opts) / alert(opts)   // M3 全局对话框
 api.call(route, { method, body, query }) // 调用 registerRoute
 api.data(source, query)                  // 读取 registerCardSource 数据源
@@ -262,10 +272,11 @@ api.storage.remove(name) / removeBefore(date)
 | **小组件** | `registerWidget` | 首页「添加卡片」选择插件小组件，或在 拓展程序 →「提供的内容 → 小组件」点击「+」加入首页 |
 | **数据源** | `registerCardSource` | 首页添加「插件数据源」卡片后选择；`ui.ux` 可用 `{{ }}` 插值 |
 | **独立页面** | `registerPage` | 顶栏「页面」入口 / 直接访问 `/p/<pluginId>/<pageId>` |
+| **设置项** | `registerSettings` | 在「用户设置」左侧导航新增一项，内容以 `kind='settings'` 渲染；随插件启用对当前用户可见 |
 | **叠加层** | `registerOverlay` | 在匹配的页面覆盖渲染；`pages` 用路由名（`home`/`blog`/`post`/`moments`/`settings`/`user-home`/`write`/`edit`/`plugin-page`）或 `*` |
 | **顶栏** | `registerTopbar` | 渲染在顶栏中央插槽 |
 | **帖子模块** | `registerPostModule` | 在帖子内容中写 `[[plugin:<pluginId>/<moduleId>]]`，可带参数：`[[plugin:<id>/<mod>\|{"foo":1}]]` |
-| **编辑器工具** | `registerEditorTool` | 编辑器工具栏按钮（默认插入对应模块标记） |
+| **编辑器工具** | `registerEditorTool` | 编辑器工具栏按钮。默认插入模块标记；声明 `ui: true` 时点击弹出插件浮窗（`kind='editor-tool'`），可用 `api.editor.insert()` 插入内容后 `close()` |
 | **接口** | `registerRoute` | 前端 `api.call(name)`；HTTP：`/api/plugins/<id>/call/<name>` |
 | **静态资源** | 放在 `sources/` | `/api/plugins/<id>/asset/<path>` |
 
@@ -465,3 +476,6 @@ api.storage.{url, list, upload, replace, remove, removeBefore}
 ---
 
 > 本指南随插件系统一起以 **AGPL-3.0-or-later** 授权。示例插件见仓库 `examples/` 目录。
+>
+> 进阶参考：`examples/interactive-form`（互动表单）演示了 **编辑器工具浮窗**（`ui: true` + `api.editor`）、
+> **帖子模块传参**（`ctx.data`）、以及 **站点级共享存储**（`plugin.shared`）的完整用法。
