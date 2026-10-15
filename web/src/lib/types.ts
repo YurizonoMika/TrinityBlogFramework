@@ -92,7 +92,14 @@ export interface RuntimePlugin {
   topbars: PluginTopbar[]
   postModules: PluginPage[]
   editorTools: PluginEditorTool[]
+  settings: PluginSettingsPanel[]
   cardSources: { id: string }[]
+}
+
+export interface PluginSettingsPanel {
+  id: string
+  title: string
+  icon?: string
 }
 
 export interface InstalledPlugin {

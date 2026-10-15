@@ -6,7 +6,12 @@ import { computed } from 'vue'
 import PluginView from './PluginView.vue'
 import { findPlugin } from '@/lib/plugins'
 
-const props = defineProps<{ pluginId: string; moduleId: string; moduleProps?: unknown }>()
+const props = defineProps<{
+  pluginId: string
+  moduleId: string
+  moduleProps?: unknown
+  editor?: { insert?: (text: string) => void; close?: () => void; edit?: (id: string) => void }
+}>()
 const plugin = computed(() => findPlugin(props.pluginId))
 </script>
 
@@ -19,6 +24,7 @@ const plugin = computed(() => findPlugin(props.pluginId))
       kind="module"
       mount="visible"
       :id="moduleId"
+      :editor="editor"
       :title="plugin.postModules.find((m) => m.id === moduleId)?.title || plugin.name"
     />
     <div v-else class="plugin-module-missing md-muted">插件「{{ pluginId }}」不可用</div>

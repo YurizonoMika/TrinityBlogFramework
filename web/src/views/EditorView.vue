@@ -6,6 +6,8 @@ import { computed, onMounted, reactive, ref, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import BaseDialog from '@/components/BaseDialog.vue'
+import PluginView from '@/components/PluginView.vue'
+import PluginModule from '@/components/PluginModule.vue'
 import { api, uploadFile } from '@/lib/api'
 import { renderMarkdown } from '@/lib/markdown'
 import { readingTime } from '@/lib/format'
@@ -40,8 +42,35 @@ const form = reactive({
   tags: [] as string[],
 })
 
-const previewHtml = computed(() => renderMarkdown(form.content))
 const minutes = computed(() => readingTime(form.content))
+
+// split the preview into markdown + plugin-module segments (same syntax as posts)
+const MODULE_RE = /\[\[plugin:([a-z0-9-]+)\/([\w-]+)(?:\|(\{[\s\S]*?\}))?\]\]/g
+const previewSegments = computed(() => {
+  const content = form.content || ''
+  const out: Array<
+    | { type: 'md'; html: string }
+    | { type: 'module'; pluginId: string; moduleId: string; props: unknown; key: number }
+  > = []
+  let last = 0
+  let match: RegExpExecArray | null
+  MODULE_RE.lastIndex = 0
+  while ((match = MODULE_RE.exec(content))) {
+    if (match.index > last) out.push({ type: 'md', html: renderMarkdown(content.slice(last, match.index)) })
+    let props: unknown = null
+    if (match[3]) {
+      try {
+        props = JSON.parse(match[3])
+      } catch {
+        props = null
+      }
+    }
+    out.push({ type: 'module', pluginId: match[1], moduleId: match[2], props, key: match.index })
+    last = match.index + match[0].length
+  }
+  if (last < content.length) out.push({ type: 'md', html: renderMarkdown(content.slice(last)) })
+  return out
+})
 
 const editorTools = computed(() =>
   plugins.list.flatMap((p) => (p.editorTools || []).map((tool) => ({ plugin: p, tool })))
@@ -55,6 +84,42 @@ function insertPluginModule(plugin: RuntimePlugin) {
   }
   insertAtCursor(`\n[[plugin:${plugin.id}/${mod.id}]]\n`)
 }
+
+// editor tools that declare `ui: true` open a dialog instead of inserting immediately
+const activeTool = ref<{
+  plugin: RuntimePlugin
+  tool: { id: string; label: string; icon?: string; ui?: boolean }
+  editId?: string
+} | null>(null)
+
+function runEditorTool(pt: { plugin: RuntimePlugin; tool: any }) {
+  if (pt.tool.ui) {
+    activeTool.value = { plugin: pt.plugin, tool: pt.tool }
+  } else {
+    insertPluginModule(pt.plugin)
+  }
+}
+
+function closeEditorTool() {
+  activeTool.value = null
+}
+
+/** Open a plugin's editor tool to edit an existing form (from the preview pane). */
+function openPluginEditor(pluginId: string, editId: string) {
+  const plugin = plugins.list.find((p) => p.id === pluginId)
+  if (!plugin) {
+    notify('插件不可用', 'error')
+    return
+  }
+  const tool = (plugin.editorTools || []).find((t: any) => t.ui)
+  if (!tool) {
+    notify('该插件不支持编辑', 'error')
+    return
+  }
+  activeTool.value = { plugin, tool: tool as any, editId }
+}
+
+const moduleEditorBridge = (pluginId: string) => ({ edit: (id: string) => openPluginEditor(pluginId, id) })
 
 async function load() {
   if (!isEdit.value) return
@@ -357,7 +422,7 @@ function goBack() {
             :key="`${pt.plugin.id}-${pt.tool.id}`"
             class="btn btn-outlined btn-sm"
             :title="`插入插件模块：${pt.plugin.name}`"
-            @click="insertPluginModule(pt.plugin)"
+            @click="runEditorTool(pt)"
           >
             <AppIcon :name="pt.tool.icon || 'extension'" :size="16" />{{ pt.tool.label }}
           </button>
@@ -383,8 +448,19 @@ function goBack() {
           />
         </div>
         <div v-show="previewMode !== 'edit'" class="pane preview-pane">
-          <div class="md-content" v-html="previewHtml" />
-          <p v-if="!form.content" class="md-muted preview-empty">预览将显示在这里</p>
+          <div class="md-content">
+            <template v-for="(seg, i) in previewSegments" :key="i">
+              <div v-if="seg.type === 'md'" v-html="seg.html" />
+              <PluginModule
+                v-else
+                :plugin-id="seg.pluginId"
+                :module-id="seg.moduleId"
+                :module-props="seg.props"
+                :editor="moduleEditorBridge(seg.pluginId)"
+              />
+            </template>
+            <p v-if="!form.content" class="md-muted preview-empty">预览将显示在这里</p>
+          </div>
         </div>
       </div>
 
@@ -399,6 +475,23 @@ function goBack() {
         <button class="btn" @click="deleteOpen = false">取消</button>
         <button class="btn btn-danger" @click="doDelete"><AppIcon name="delete" :size="16" />删除</button>
       </template>
+    </BaseDialog>
+
+    <BaseDialog
+      :open="!!activeTool"
+      :title="activeTool ? `插件工具：${activeTool.plugin.name}` : ''"
+      wide
+      @close="closeEditorTool"
+    >
+      <PluginView
+        v-if="activeTool"
+        :plugin="activeTool.plugin"
+        kind="editor-tool"
+        :id="activeTool.tool.id"
+        mount="eager"
+        :data="{ editId: activeTool.editId }"
+        :editor="{ insert: insertAtCursor, close: closeEditorTool }"
+      />
     </BaseDialog>
   </div>
 </template>

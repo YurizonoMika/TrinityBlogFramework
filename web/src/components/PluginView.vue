@@ -13,10 +13,16 @@ const props = defineProps<{
   source?: string
   title?: string
   data?: unknown
-  kind?: 'widget' | 'page' | 'module' | 'overlay' | 'topbar'
+  kind?: 'widget' | 'page' | 'module' | 'overlay' | 'topbar' | 'editor-tool' | 'settings'
   id?: string
   /** when to mount the plugin: immediately, when scrolled near, or when idle */
   mount?: 'eager' | 'visible' | 'idle'
+  /** editor bridge: insert text at the cursor / close the dialog / edit an existing form */
+  editor?: {
+    insert?: (text: string) => void
+    close?: () => void
+    edit?: (id: string) => void
+  }
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
@@ -116,6 +122,7 @@ function makeApi(pluginId: string, owner: string) {
     get isAdmin() {
       return Boolean(auth.user)
     },
+    editor: props.editor,
     dialog: {
       confirm: (opts: any) => confirmDialog(opts),
       alert: (opts: any) => alertDialog(opts),
@@ -240,6 +247,7 @@ async function load() {
                 root,
                 host,
                 owner,
+                data: resolvedData.value,
                 api: makeApi(props.plugin.id, owner),
               })
             }

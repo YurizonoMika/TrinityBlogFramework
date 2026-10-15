@@ -7,6 +7,7 @@ import { useRoute } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import ImageCropper from '@/components/ImageCropper.vue'
 import BaseDialog from '@/components/BaseDialog.vue'
+import PluginView from '@/components/PluginView.vue'
 import { api, uploadFile } from '@/lib/api'
 import { auth, setUser } from '@/stores/auth'
 import {
@@ -22,14 +23,11 @@ import {
 } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import { confirmDialog } from '@/stores/dialog'
-import { loadPlugins } from '@/lib/plugins'
+import { loadPlugins, plugins } from '@/lib/plugins'
 import type { InstalledPlugin, LinkItem, ProfileTag } from '@/lib/types'
 
 const route = useRoute()
-const validTabs = ['profile', 'site', 'categories', 'activity', 'plugins', 'users', 'account', 'storage', 'backup'] as const
-const tab = ref<(typeof validTabs)[number]>(
-  validTabs.includes(route.query.tab as any) ? (route.query.tab as any) : 'profile'
-)
+const tab = ref<string>((route.query.tab as string) || 'profile')
 const saving = ref(false)
 const importing = ref(false)
 const importResult = ref<any>(null)
@@ -66,6 +64,17 @@ interface ImportPreview {
 }
 const importPreview = ref<ImportPreview | null>(null)
 const importState = reactive<{ busy: boolean; progress: number | null }>({ busy: false, progress: null })
+// plugin management dialog
+const manageId = ref<string | null>(null)
+const managedPlugin = computed<InstalledPlugin | null>(
+  () => installedPlugins.value.find((p) => p.id === manageId.value) || null
+)
+function openManage(p: InstalledPlugin) {
+  manageId.value = p.id
+}
+function closeManage() {
+  manageId.value = null
+}
 
 const profile = reactive({ display_name: '', email: '', avatar: '', bio: '' })
 const homeBanner = reactive({ banner: '', subtitle: '', description: '' })
@@ -148,15 +157,24 @@ const ALL_TABS = [
   { id: 'backup', label: '备份与迁移', icon: 'save', adminOnly: true },
 ] as const
 const canManagePlugins = computed(() => isAdminUser.value || Boolean(auth.user?.permissions?.plugins))
-const TABS = computed(() =>
-  ALL_TABS.filter((t) => {
+// settings panels contributed by enabled plugins (available to the current user)
+const pluginSettings = computed(() =>
+  plugins.list.flatMap((p) => (p.settings || []).map((s) => ({ plugin: p, setting: s })))
+)
+const TABS = computed(() => [
+  ...ALL_TABS.filter((t) => {
     if (t.id === 'plugins') return canManagePlugins.value
     return isAdminUser.value || !t.adminOnly
-  })
-)
+  }),
+  ...pluginSettings.value.map(({ plugin, setting }) => ({
+    id: `plugin:${plugin.id}:${setting.id}`,
+    label: setting.title,
+    icon: setting.icon || 'settings',
+  })),
+])
 // if the active tab isn't available to this user, fall back to the first one
 watch(TABS, (tabs) => {
-  if (!tabs.some((t) => t.id === tab.value)) tab.value = (tabs[0]?.id as any) || 'profile'
+  if (!tabs.some((t) => t.id === tab.value)) tab.value = tabs[0]?.id || 'profile'
 })
 
 async function load() {
@@ -1085,6 +1103,7 @@ async function removePlugin(p: InstalledPlugin) {
   try {
     await api(`/plugins/${p.id}${pluginQuery()}`, { method: 'DELETE' })
     installedPlugins.value = installedPlugins.value.filter((x) => x.id !== p.id)
+    if (manageId.value === p.id) manageId.value = null
     await loadPlugins()
     notify('插件已删除', 'success')
   } catch (err: any) {
@@ -1619,114 +1638,28 @@ const PERMISSION_LABELS: Record<string, string> = {
             还没有安装任何插件。
           </div>
 
-          <div v-for="p in installedPlugins" :key="p.id" class="plugin-card">
-            <div class="plugin-card-head">
-              <div>
-                <div class="plugin-name">
-                  {{ p.name }}
-                  <span class="md-muted">v{{ p.version }}</span>
-                  <span v-if="p.error" class="badge hidden-badge">加载失败</span>
-                  <span v-else-if="p.enabled" class="badge success">已启用</span>
-                </div>
-                <p class="md-muted tiny">
-                  {{ p.description || '（无描述）' }}
-                  <template v-if="p.author"> · {{ p.author }}</template>
-                </p>
-                <p v-if="p.error" class="plugin-error">{{ p.error }}</p>
+          <div v-for="p in installedPlugins" :key="p.id" class="plugin-row">
+            <div class="plugin-row-main">
+              <div class="plugin-name">
+                {{ p.name }}
+                <span class="md-muted">v{{ p.version }}</span>
+                <span v-if="p.error" class="badge hidden-badge">加载失败</span>
+                <span v-else-if="p.enabled" class="badge success">已启用</span>
+                <span v-if="p.enabled && p.visitor" class="badge">对访客开放</span>
               </div>
-              <button v-if="isAdminUser || !pluginOwner" class="icon-btn danger" title="删除" @click="removePlugin(p)">
-                <AppIcon name="delete" :size="18" />
+              <p class="md-muted tiny">{{ p.description || '（无描述）' }}</p>
+            </div>
+            <div class="plugin-row-actions">
+              <button class="btn btn-tonal btn-sm" @click="openManage(p)">
+                <AppIcon name="settings" :size="16" />管理
               </button>
-            </div>
-
-            <div class="plugin-toggles">
-              <label class="switch" :title="isAdminUser ? '' : '仅管理员可启用插件'">
-                <input
-                  type="checkbox"
-                  :checked="p.enabled"
-                  :disabled="!isAdminUser"
-                  @change="updatePlugin(p, { enabled: !p.enabled })"
-                />
-                <span class="switch-track"><span class="switch-thumb" /></span>
-                <span>启用</span>
-              </label>
-              <label class="switch" :title="isAdminUser ? '' : '仅管理员可对访客公开'">
-                <input
-                  type="checkbox"
-                  :checked="p.visitor"
-                  :disabled="!isAdminUser"
-                  @change="updatePlugin(p, { visitor: !p.visitor })"
-                />
-                <span class="switch-track"><span class="switch-thumb" /></span>
-                <span>对访客开放</span>
-              </label>
-            </div>
-
-            <div v-if="p.requestedPermissions.length" class="plugin-perms">
-              <span class="mini-label">权限</span>
-              <label
-                v-for="perm in p.requestedPermissions"
-                :key="perm"
-                class="perm-item"
-                :title="canGrantPerm(perm) ? '' : '管理员未授权你授予该权限'"
+              <button
+                v-if="isAdminUser || !pluginOwner"
+                class="btn btn-outlined btn-sm"
+                @click="removePlugin(p)"
               >
-                <input
-                  type="checkbox"
-                  :checked="p.permissions.includes(perm)"
-                  :disabled="!canGrantPerm(perm)"
-                  @change="togglePermission(p, perm)"
-                />
-                <span>{{ PERMISSION_LABELS[perm] || perm }}<span v-if="!canGrantPerm(perm)" class="md-muted">（未授权）</span></span>
-              </label>
-              <label v-if="p.requestedPermissions.includes('token')" class="field filled" style="margin-top: 8px">
-                <input v-model="p.token" class="field-input" placeholder=" " @change="updatePlugin(p, { token: p.token })" />
-                <span class="field-label">访问令牌</span>
-              </label>
-            </div>
-
-            <div
-              v-if="p.loaded && (p.widgets.length || p.pages.length || p.postModules.length || p.overlays.length || p.topbars?.length)"
-              class="plugin-contrib"
-            >
-              <span class="mini-label">提供的内容</span>
-              <div v-if="p.widgets.length" class="contrib-row">
-                <span class="contrib-label">小组件</span>
-                <button
-                  v-for="w in p.widgets"
-                  :key="w.id"
-                  class="btn btn-tonal btn-sm"
-                  @click="addWidgetCard(p, w)"
-                >
-                  <AppIcon name="add" :size="15" />{{ w.title }}
-                </button>
-              </div>
-              <div v-if="p.pages.length" class="contrib-row">
-                <span class="contrib-label">页面</span>
-                <router-link
-                  v-for="pg in p.pages"
-                  :key="pg.id"
-                  :to="`/p/${p.id}/${pg.id}`"
-                  class="chip"
-                >
-                  {{ pg.title }}
-                </router-link>
-              </div>
-              <div v-if="p.overlays.length" class="contrib-row">
-                <span class="contrib-label">叠加层</span>
-                <span v-for="o in p.overlays" :key="o.id" class="chip static">
-                  叠加层 · {{ o.id }}
-                </span>
-              </div>
-              <div v-if="p.topbars?.length" class="contrib-row">
-                <span class="contrib-label">顶栏</span>
-                <span v-for="tb in p.topbars" :key="tb.id" class="chip static">
-                  顶栏 · {{ tb.title }}
-                </span>
-              </div>
-              <div v-if="p.postModules.length" class="contrib-row">
-                <span class="contrib-label">帖子模块</span>
-                <code v-for="m in p.postModules" :key="m.id">[[plugin:{{ p.id }}/{{ m.id }}]]</code>
-              </div>
+                <AppIcon name="delete" :size="16" />删除
+              </button>
             </div>
           </div>
 
@@ -1799,6 +1732,120 @@ const PERMISSION_LABELS: Record<string, string> = {
               </button>
             </template>
           </BaseDialog>
+
+          <!-- manage plugin -->
+          <BaseDialog
+            :open="!!managedPlugin"
+            :title="managedPlugin ? `管理插件 · ${managedPlugin.name}` : ''"
+            @close="closeManage"
+          >
+            <template v-if="managedPlugin">
+              <p class="md-muted tiny" style="margin-bottom: 12px">
+                v{{ managedPlugin.version }} · ID <code>{{ managedPlugin.id }}</code>
+                <template v-if="managedPlugin.author"> · {{ managedPlugin.author }}</template>
+              </p>
+              <p v-if="managedPlugin.description" class="md-muted" style="margin-bottom: 14px">
+                {{ managedPlugin.description }}
+              </p>
+              <p v-if="managedPlugin.error" class="plugin-error">{{ managedPlugin.error }}</p>
+
+              <div class="plugin-toggles">
+                <label class="switch" :title="isAdminUser ? '' : '仅管理员可启用插件'">
+                  <input
+                    type="checkbox"
+                    :checked="managedPlugin.enabled"
+                    :disabled="!isAdminUser"
+                    @change="updatePlugin(managedPlugin, { enabled: !managedPlugin.enabled })"
+                  />
+                  <span class="switch-track"><span class="switch-thumb" /></span>
+                  <span>启用</span>
+                </label>
+                <label class="switch" :title="isAdminUser ? '' : '仅管理员可对访客公开'">
+                  <input
+                    type="checkbox"
+                    :checked="managedPlugin.visitor"
+                    :disabled="!isAdminUser"
+                    @change="updatePlugin(managedPlugin, { visitor: !managedPlugin.visitor })"
+                  />
+                  <span class="switch-track"><span class="switch-thumb" /></span>
+                  <span>对访客开放</span>
+                </label>
+              </div>
+
+              <div v-if="managedPlugin.requestedPermissions.length" class="plugin-perms">
+                <span class="mini-label">权限</span>
+                <label
+                  v-for="perm in managedPlugin.requestedPermissions"
+                  :key="perm"
+                  class="perm-item"
+                  :title="canGrantPerm(perm) ? '' : '管理员未授权你授予该权限'"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="managedPlugin.permissions.includes(perm)"
+                    :disabled="!canGrantPerm(perm)"
+                    @change="togglePermission(managedPlugin, perm)"
+                  />
+                  <span>{{ PERMISSION_LABELS[perm] || perm }}<span v-if="!canGrantPerm(perm)" class="md-muted">（未授权）</span></span>
+                </label>
+                <label v-if="managedPlugin.requestedPermissions.includes('token')" class="field filled" style="margin-top: 8px">
+                  <input v-model="managedPlugin.token" class="field-input" placeholder=" " @change="updatePlugin(managedPlugin, { token: managedPlugin.token })" />
+                  <span class="field-label">访问令牌</span>
+                </label>
+              </div>
+
+              <div
+                v-if="managedPlugin.loaded && (managedPlugin.widgets.length || managedPlugin.pages.length || managedPlugin.postModules.length || managedPlugin.overlays.length || managedPlugin.topbars?.length || managedPlugin.editorTools?.length)"
+                class="plugin-contrib"
+              >
+                <span class="mini-label">提供的内容</span>
+                <div v-if="managedPlugin.widgets.length" class="contrib-row">
+                  <span class="contrib-label">小组件</span>
+                  <button
+                    v-for="w in managedPlugin.widgets"
+                    :key="w.id"
+                    class="btn btn-tonal btn-sm"
+                    @click="addWidgetCard(managedPlugin, w)"
+                  >
+                    <AppIcon name="add" :size="15" />{{ w.title }}
+                  </button>
+                </div>
+                <div v-if="managedPlugin.pages.length" class="contrib-row">
+                  <span class="contrib-label">页面</span>
+                  <router-link v-for="pg in managedPlugin.pages" :key="pg.id" :to="`/p/${managedPlugin.id}/${pg.id}`" class="chip">
+                    {{ pg.title }}
+                  </router-link>
+                </div>
+                <div v-if="managedPlugin.overlays.length" class="contrib-row">
+                  <span class="contrib-label">叠加层</span>
+                  <span v-for="o in managedPlugin.overlays" :key="o.id" class="chip static">叠加层 · {{ o.id }}</span>
+                </div>
+                <div v-if="managedPlugin.topbars?.length" class="contrib-row">
+                  <span class="contrib-label">顶栏</span>
+                  <span v-for="tb in managedPlugin.topbars" :key="tb.id" class="chip static">顶栏 · {{ tb.title }}</span>
+                </div>
+                <div v-if="managedPlugin.postModules.length" class="contrib-row">
+                  <span class="contrib-label">帖子模块</span>
+                  <code v-for="m in managedPlugin.postModules" :key="m.id">[[plugin:{{ managedPlugin.id }}/{{ m.id }}]]</code>
+                </div>
+              </div>
+            </template>
+
+            <template #actions>
+              <button class="btn btn-filled" @click="closeManage">完成</button>
+            </template>
+          </BaseDialog>
+        </section>
+
+        <!-- plugin-contributed settings panels -->
+        <section
+          v-for="ps in pluginSettings"
+          :key="ps.plugin.id + ':' + ps.setting.id"
+          v-show="tab === `plugin:${ps.plugin.id}:${ps.setting.id}`"
+          class="card"
+        >
+          <h2 class="panel-title">{{ ps.setting.title }}</h2>
+          <PluginView :plugin="ps.plugin" kind="settings" :id="ps.setting.id" />
         </section>
 
         <!-- account -->
@@ -1959,10 +2006,10 @@ const PERMISSION_LABELS: Record<string, string> = {
 
               <div v-if="storage.categories" class="storage-block">
                 <div class="storage-row-head"><span class="mini-label">插件</span><span class="md-muted">{{ storage.categories.plugins.length }} 个</span></div>
-                <div v-for="pl in storage.categories.plugins" :key="pl.id" class="storage-plugin">
+                <div v-for="pl in storage.categories.plugins" :key="(pl.owner || '') + ':' + pl.id" class="storage-plugin">
                   <div class="sc-main">
                     <strong>{{ pl.name }}</strong>
-                    <span class="md-muted">{{ pl.files }} 个文件 · {{ pl.enabled ? '已启用' : '已停用' }}</span>
+                    <span class="md-muted">{{ pl.files }} 个文件 · {{ pl.enabled ? '已启用' : '已停用' }}<template v-if="pl.owner"> · @{{ pl.owner }}</template></span>
                   </div>
                   <span class="sc-size">{{ fmtBytes(pl.bytes) }}</span>
                   <button class="btn btn-danger btn-sm" :disabled="!pl.bytes" @click="clearPluginStorage(pl.owner || '', pl.id, pl.name)">清空</button>
@@ -2711,5 +2758,33 @@ code.preview-val {
 }
 .install-progress {
   margin-top: 12px;
+}
+.plugin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-shape-lg);
+  background: var(--md-surface-container-low);
+  margin-bottom: 10px;
+}
+.plugin-row-main {
+  min-width: 0;
+}
+.plugin-row-main .plugin-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.plugin-row-main .md-muted {
+  margin: 4px 0 0;
+}
+.plugin-row-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
 }
 </style>
