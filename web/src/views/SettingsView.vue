@@ -153,7 +153,7 @@ const isAdminUser = computed(() => auth.user?.role === 'admin')
 const ALL_TABS = [
   { id: 'profile', label: '个人资料', icon: 'person', adminOnly: false },
   { id: 'site', label: '站点外观', icon: 'palette', adminOnly: true },
-  { id: 'categories', label: '博客分类', icon: 'article', adminOnly: true },
+  { id: 'categories', label: '博客分类', icon: 'article', adminOnly: false },
   { id: 'activity', label: '活动集成', icon: 'history', adminOnly: false },
   { id: 'plugins', label: '拓展程序', icon: 'extension', adminOnly: false },
   { id: 'users', label: '用户管理', icon: 'group', adminOnly: true },
@@ -1413,7 +1413,7 @@ const PERMISSION_LABELS: Record<string, string> = {
         <section v-show="tab === 'categories'" class="card">
           <h2 class="panel-title">博客分类</h2>
           <p class="md-muted panel-hint">
-            用于博客列表筛选
+            你自己博客的帖子分类，用于你自己的博客页面与分类筛选（每个用户独立）。
           </p>
 
           <div class="sub-head">
@@ -1658,6 +1658,7 @@ const PERMISSION_LABELS: Record<string, string> = {
                 <span v-if="p.error" class="badge hidden-badge">加载失败</span>
                 <span v-else-if="p.enabled" class="badge success">已启用</span>
                 <span v-if="p.enabled && p.visitor" class="badge">对访客开放</span>
+                <span v-if="p.locked" class="badge">已锁定</span>
               </div>
               <p class="md-muted tiny">{{ p.description || '（无描述）' }}</p>
             </div>
@@ -1666,7 +1667,7 @@ const PERMISSION_LABELS: Record<string, string> = {
                 <AppIcon name="settings" :size="16" />管理
               </button>
               <button
-                v-if="isAdminUser"
+                v-if="isAdminUser || !p.locked"
                 class="btn btn-outlined btn-sm"
                 @click="removePlugin(p)"
               >
@@ -1806,6 +1807,15 @@ const PERMISSION_LABELS: Record<string, string> = {
                   <span class="switch-track"><span class="switch-thumb" /></span>
                   <span>对访客开放</span>
                 </label>
+                <label v-if="isAdminUser" class="switch" title="开启后，插件所有者不可删除该插件">
+                  <input
+                    type="checkbox"
+                    :checked="!!managedPlugin.locked"
+                    @change="updatePlugin(managedPlugin, { locked: !managedPlugin.locked })"
+                  />
+                  <span class="switch-track"><span class="switch-thumb" /></span>
+                  <span>禁止用户删除此插件</span>
+                </label>
               </div>
 
               <div v-if="managedPlugin.requestedPermissions.length" class="plugin-perms">
@@ -1929,14 +1939,16 @@ const PERMISSION_LABELS: Record<string, string> = {
           <div v-if="usersLoading" class="skeleton" style="height: 120px; border-radius: 20px" />
           <div v-else class="user-list">
             <div v-for="u in users" :key="u.id" class="user-row">
-              <span class="avatar sm">{{ (u.display_name || u.username).charAt(0).toUpperCase() }}</span>
-              <div class="user-main">
-                <div class="user-name">
-                  {{ u.display_name || u.username }}
-                  <span v-if="u.role === 'admin'" class="badge">管理员</span>
+              <router-link class="user-id" :to="`/user/${u.username}`" :title="`进入 @${u.username} 的主页`">
+                <span class="avatar sm">{{ (u.display_name || u.username).charAt(0).toUpperCase() }}</span>
+                <div class="user-main">
+                  <div class="user-name">
+                    {{ u.display_name || u.username }}
+                    <span v-if="u.role === 'admin'" class="badge">管理员</span>
+                  </div>
+                  <div class="md-muted tiny">@{{ u.username }} · {{ u.posts }} 帖 · {{ u.moments }} 动态</div>
                 </div>
-                <div class="md-muted tiny">@{{ u.username }} · {{ u.posts }} 帖 · {{ u.moments }} 动态</div>
-              </div>
+              </router-link>
               <div class="user-perms">
                 <label class="perm"><input type="checkbox" :checked="u.role === 'admin' || u.permissions?.post" :disabled="u.role === 'admin'" @change="toggleUserPermission(u, 'post')" />发帖</label>
                 <label class="perm"><input type="checkbox" :checked="u.role === 'admin' || u.permissions?.moment" :disabled="u.role === 'admin'" @change="toggleUserPermission(u, 'moment')" />动态</label>
@@ -2728,6 +2740,13 @@ const PERMISSION_LABELS: Record<string, string> = {
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 45%, transparent);
   flex-wrap: wrap;
 }
+.user-id {
+  display: flex; align-items: center; gap: 12px; flex: 1; min-width: 160px;
+  color: inherit; text-decoration: none; border-radius: 14px; padding: 2px 4px; margin: -2px -4px;
+  transition: background-color var(--md-dur-short) var(--md-ease-standard);
+}
+.user-id:hover { background: color-mix(in srgb, var(--md-primary) 8%, transparent); text-decoration: none; }
+.user-id:hover .user-name { color: var(--md-primary); }
 .user-main { flex: 1; min-width: 160px; }
 .user-name { display: flex; align-items: center; gap: 8px; font-weight: 700; }
 .user-perms { display: flex; gap: 10px; flex-wrap: wrap; }

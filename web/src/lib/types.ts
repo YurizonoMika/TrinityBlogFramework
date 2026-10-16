@@ -118,6 +118,7 @@ export interface InstalledPlugin {
   hasApp: boolean
   enabled: boolean
   visitor: boolean
+  locked?: boolean
   permissions: string[]
   token?: string
   loaded: boolean
