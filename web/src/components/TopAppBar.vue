@@ -27,7 +27,8 @@ const searchRef = ref<HTMLElement | null>(null)
 const actionsRef = ref<HTMLElement | null>(null)
 const topbarCenterRef = ref<HTMLElement | null>(null)
 const collapsed = ref(false)
-const topbarWidth = ref(0) // cached natural width of plugin topbar components
+const topbarWidth = ref(0) // cached natural width of plugin topbar components (max seen)
+let collapseAt = 0 // container width at which we last collapsed (hysteresis)
 let resizeObserver: ResizeObserver | null = null
 
 const title = computed(() => site.site.title || '我的主页')
@@ -71,15 +72,30 @@ function measure() {
   const need = nav.offsetWidth
   if (!need) return
   // plugin topbar components are treated like nav items: they collapse together.
-  // measure their natural width only while actually laid out (cache when hidden)
+  // measure their width only while laid out, and keep the WIDEST value seen so a
+  // fluid component shrinking under pressure can't make us "fit" and pop back out
   const center = topbarCenterRef.value
-  if (center && center.offsetParent !== null) topbarWidth.value = center.offsetWidth
+  if (center && center.offsetParent !== null) {
+    topbarWidth.value = Math.max(topbarWidth.value, center.offsetWidth)
+  }
   const others =
     (brandRef.value?.offsetWidth || 0) +
     (searchRef.value?.offsetWidth || 0) +
     (actionsRef.value?.offsetWidth || 0) +
     72
-  collapsed.value = bar.clientWidth - others < need + topbarWidth.value
+  const avail = bar.clientWidth
+  const required = others + need + topbarWidth.value
+  // hysteresis: collapse as soon as it doesn't fit, but only expand again once the
+  // container grew past the collapse point AND there is comfortable headroom.
+  // This keeps the tabs/topbar inside the menu while the page keeps getting narrower.
+  if (!collapsed.value) {
+    if (avail < required) {
+      collapsed.value = true
+      collapseAt = avail
+    }
+  } else if (avail > collapseAt + 64 && avail > required) {
+    collapsed.value = false
+  }
 }
 
 function isActive(path: string) {
@@ -102,7 +118,10 @@ function doLogout() {
 
 watch(
   () => [navItems.value.length, title.value, topbarPlugins.value.length].join(),
-  () => nextTick(measure)
+  () => {
+    topbarWidth.value = 0 // re-measure the plugin top bar set
+    nextTick(measure)
+  }
 )
 
 onMounted(() => {
@@ -351,6 +370,8 @@ onUnmounted(() => {
   gap: 10px;
   height: 42px;
   padding: 0 14px;
+  /* keep the search + actions group right-aligned even when the center is collapsed */
+  margin-left: auto;
   margin-right: 6px;
   border: 1px solid var(--md-outline-variant);
   border-radius: var(--md-shape-full);
