@@ -123,6 +123,7 @@ useParallax(bgRef, 0.3, 140)
 .banner.has-image .banner-eyebrow {
   background: rgb(255 255 255 / 0.18);
   color: #fff;
+  -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
 }
 .banner.has-image .accent-text {
@@ -196,8 +197,8 @@ useParallax(bgRef, 0.3, 140)
   background: color-mix(in srgb, var(--md-surface) 42%, transparent);
   color: var(--md-on-surface);
   border: none;
-  backdrop-filter: blur(16px) saturate(1.7);
   -webkit-backdrop-filter: blur(16px) saturate(1.7);
+  backdrop-filter: blur(16px) saturate(1.7);
   box-shadow: 0 2px 12px rgb(0 0 0 / 0.1);
 }
 .banner-actions .btn-glass:hover {
@@ -257,6 +258,7 @@ useParallax(bgRef, 0.3, 140)
   font-weight: 600;
   font-size: 0.82rem;
   box-shadow: var(--md-elev-1);
+  -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   transition: transform var(--md-dur-short) var(--md-ease-expressive);
 }

@@ -29,7 +29,7 @@ router.post('/', (req, res) => {
   const info = db
     .prepare(
       `INSERT INTO users (username, password_hash, display_name, role, permissions)
-       VALUES (?, ?, ?, 'admin', ?)`
+       VALUES (?, ?, ?, 'super', ?)`
     )
     .run(username, hashPassword(password), displayName || username, JSON.stringify({ post: true, moment: true, plugins: true }))
 

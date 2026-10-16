@@ -234,9 +234,9 @@ router.post('/import', upload.single('file'), (req, res) => {
 
   // never leave the site without an admin (old backups may lack roles)
   db.exec(
-    `UPDATE users SET role = 'admin'
+    `UPDATE users SET role = 'super'
      WHERE id = (SELECT MIN(id) FROM users)
-       AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`
+       AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'super')`
   )
   // merge legacy global settings into the owner (for older backups)
   migrateLegacyUserData()

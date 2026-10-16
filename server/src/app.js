@@ -18,6 +18,7 @@ import activityRoutes from './routes/activity.js'
 import nintendoRoutes from './routes/nintendo.js'
 import backupRoutes from './routes/backup.js'
 import pluginRoutes from './routes/plugins.js'
+import themeRoutes from './routes/themes.js'
 import uploadRoutes from './routes/uploads.js'
 import { PLUGINS_DIR } from './plugins.js'
 
@@ -87,6 +88,7 @@ export function createApp() {
   app.use('/api/nintendo', nintendoRoutes)
   app.use('/api/backup', backupRoutes)
   app.use('/api/plugins', pluginRoutes)
+  app.use('/api/themes', themeRoutes)
   app.use('/api/upload', uploadRoutes)
 
   app.get('/api/health', (req, res) => res.json({ ok: true }))

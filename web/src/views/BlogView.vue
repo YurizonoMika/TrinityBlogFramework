@@ -129,7 +129,7 @@ function statusLabel(s: Post['status']) {
     </div>
 
     <div v-if="loading" class="post-grid">
-      <div v-for="i in 6" :key="i" class="skeleton" style="height: 240px; border-radius: 24px" />
+      <div v-for="i in 6" :key="i" class="skeleton" style="height: 240px; border-radius: var(--md-shape-xl)" />
     </div>
 
     <div v-else-if="filtered.length" class="post-grid">
@@ -246,9 +246,10 @@ function statusLabel(s: Post['status']) {
 .post-card {
   display: flex;
   flex-direction: column;
-  background: var(--md-surface-container-low);
-  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent);
-  border-radius: var(--md-shape-2xl);
+  background: var(--card-bg);
+  border: var(--card-border, 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent));
+  border-radius: var(--card-radius, var(--md-shape-2xl));
+  box-shadow: var(--card-shadow);
   overflow: hidden;
   transition: transform var(--md-dur-medium) var(--md-ease-expressive),
     box-shadow var(--md-dur-medium) var(--md-ease-standard);

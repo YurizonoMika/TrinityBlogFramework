@@ -3,9 +3,10 @@
 
 import { Router } from 'express'
 import { db, getSetting, setSetting, getUserSetting, setUserSetting, primaryUserId } from '../db.js'
-import { requireAuth, requireAdmin, hashPassword, verifyPassword, publicUser } from '../auth.js'
+import { requireAuth, requireAdmin, hashPassword, verifyPassword, publicUser, isAdminUser } from '../auth.js'
 import { extractSeedColor, resolveThemeSource } from '../seed.js'
 import { pageUsername } from '../scope.js'
+import { themeExists } from '../themes.js'
 import { resetNintendoConfig, getNintendoServerConfig, setNintendoServerConfig } from '../nintendo.js'
 import {
   getStorageOverview,
@@ -18,7 +19,7 @@ const router = Router()
 
 /** Admin may act on another user via ?userId=; everyone else acts on themselves. */
 function targetUser(req) {
-  if (req.user?.role === 'admin' && req.query.userId) {
+  if (isAdminUser(req.user) && req.query.userId) {
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.query.userId))
     if (u) return u
   }
@@ -98,10 +99,12 @@ router.get('/', requireAuth, (req, res) => {
     links: getUserSetting(target.id, 'links', []),
     tags: getUserSetting(target.id, 'tags', []),
     categories: getUserSetting(target.id, 'categories', []),
+    theme: getUserSetting(target.id, 'theme', ''),
+    themeOptions: getUserSetting(target.id, 'theme_options', {}),
     profile: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(target.id)),
     homepage: userHomepage(target.id),
-    isAdmin: req.user.role === 'admin',
-    nintendoServer: req.user.role === 'admin' ? getNintendoServerConfig() : undefined,
+    isAdmin: isAdminUser(req.user),
+    nintendoServer: isAdminUser(req.user) ? getNintendoServerConfig() : undefined,
   })
 })
 
@@ -153,7 +156,7 @@ router.put('/integrations', requireAuth, (req, res) => {
       friendCode: n.friendCode ?? current.nintendo?.friendCode ?? '',
       games: Array.isArray(n.games) ? n.games : current.nintendo?.games || [],
     }
-    if (req.user.role === 'admin') {
+    if (isAdminUser(req.user)) {
       const creds = {}
       for (const k of ['zncaApiUrl', 'clientId', 'clientSecret', 'provider', 'remoteConfig', 'configUrl']) {
         if (n[k] !== undefined) creds[k] = n[k]
@@ -165,7 +168,7 @@ router.put('/integrations', requireAuth, (req, res) => {
   resetNintendoConfig()
   res.json({
     integrations: next,
-    nintendoServer: req.user.role === 'admin' ? getNintendoServerConfig() : undefined,
+    nintendoServer: isAdminUser(req.user) ? getNintendoServerConfig() : undefined,
   })
 })
 
@@ -179,6 +182,23 @@ router.put('/tags', requireAuth, (req, res) => {
   const target = targetUser(req)
   const tags = Array.isArray(req.body?.tags) ? req.body.tags : []
   res.json({ tags: setUserSetting(target.id, 'tags', tags) })
+})
+
+// per-user theme (each user applies a theme to their own pages/plugins)
+router.put('/theme', requireAuth, (req, res) => {
+  const target = targetUser(req)
+  const id = String(req.body?.theme || '').trim()
+  if (id && !themeExists(id)) return res.status(400).json({ error: '主题不存在' })
+  setUserSetting(target.id, 'theme', id)
+  if (req.body && req.body.options && typeof req.body.options === 'object') {
+    const clean = {}
+    for (const [k, v] of Object.entries(req.body.options)) {
+      if (!/^[a-z0-9-]+$/i.test(k)) continue
+      clean[k] = typeof v === 'boolean' || typeof v === 'number' ? v : String(v ?? '').slice(0, 300)
+    }
+    setUserSetting(target.id, 'theme_options', clean)
+  }
+  res.json({ theme: id, themeOptions: getUserSetting(target.id, 'theme_options', {}) })
 })
 
 // per-user blog categories (each user manages their own)
@@ -240,7 +260,7 @@ router.put('/account', requireAuth, (req, res) => {
 /* ---------------- storage ---------------- */
 
 router.get('/storage', requireAuth, (req, res) => {
-  const isAdmin = req.user.role === 'admin'
+  const isAdmin = isAdminUser(req.user)
   const targetId = isAdmin && req.query.userId ? Number(req.query.userId) : req.user.id
   res.json(getStorageOverview({ userId: targetId, isAdmin }))
 })

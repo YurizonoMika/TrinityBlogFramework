@@ -3,7 +3,7 @@
 
 import { Router } from 'express'
 import { db, primaryUserId } from '../db.js'
-import { requireAuth, can } from '../auth.js'
+import { requireAuth, can, isAdminUser } from '../auth.js'
 import { pageUsername } from '../scope.js'
 
 const router = Router()
@@ -12,7 +12,7 @@ const MAX_IMAGES = 4
 
 function ownsOrAdmin(user, row) {
   if (!user) return false
-  if (user.role === 'admin') return true
+  if (isAdminUser(user)) return true
   return row.author_id != null && row.author_id === user.id
 }
 

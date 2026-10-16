@@ -99,11 +99,11 @@ for (const sql of [
   }
 }
 
-// the first (site owner) account becomes the admin
+// the first (site owner) account becomes the single super administrator
 db.exec(
-  `UPDATE users SET role = 'admin'
+  `UPDATE users SET role = 'super'
    WHERE id = (SELECT MIN(id) FROM users)
-     AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`
+     AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'super')`
 )
 // legacy cards + content belong to the admin
 db.exec(
@@ -261,6 +261,8 @@ export function allUserSettings(userId) {
 
 /** The site owner's user id (first admin, else first user). */
 export function primaryUserId() {
+  const superAdmin = db.prepare("SELECT id FROM users WHERE role = 'super' ORDER BY id LIMIT 1").get()
+  if (superAdmin) return superAdmin.id
   const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get()
   if (admin) return admin.id
   const first = db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get()

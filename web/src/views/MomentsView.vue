@@ -168,7 +168,7 @@ function openLightbox(images: string[], index: number) {
     </header>
 
     <div v-if="loading" class="moments-grid">
-      <div v-for="i in 6" :key="i" class="skeleton" style="height: 220px; border-radius: 24px; margin-bottom: 20px" />
+      <div v-for="i in 6" :key="i" class="skeleton" style="height: 220px; border-radius: var(--md-shape-xl); margin-bottom: 20px" />
     </div>
 
     <div v-else-if="moments.length" class="moments-grid">
@@ -283,9 +283,10 @@ function openLightbox(images: string[], index: number) {
   break-inside: avoid;
   margin-bottom: 20px;
   padding: 18px;
-  background: var(--md-surface-container-low);
-  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent);
-  border-radius: var(--md-shape-2xl);
+  background: var(--card-bg);
+  border: var(--card-border, 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent));
+  border-radius: var(--card-radius, var(--md-shape-2xl));
+  box-shadow: var(--card-shadow);
   scroll-margin-top: 96px;
   transition: transform var(--md-dur-medium) var(--md-ease-expressive),
     box-shadow var(--md-dur-medium) var(--md-ease-standard);

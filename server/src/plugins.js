@@ -3,6 +3,7 @@
 
 import vm from 'node:vm'
 import AdmZip from 'adm-zip'
+import { SDK_VERSION, compareSemver, sdkSatisfies } from './sdk.js'
 import {
   readFileSync,
   writeFileSync,
@@ -35,35 +36,7 @@ mkdirSync(USERS_DIR, { recursive: true })
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 
-/**
- * Plugin SDK version advertised by the framework. Plugins may declare a minimum
- * required SDK via `minSdkVersion` in plugin.json; installing/loading a plugin
- * whose requirement is newer than this is refused.
- */
-export const SDK_VERSION = '1.0.0'
-
-function parseSemver(v) {
-  return String(v || '')
-    .split(/[.+-]/)
-    .slice(0, 3)
-    .map((n) => parseInt(n, 10) || 0)
-}
-
-/** Compare two semver-ish strings → -1 | 0 | 1. */
-export function compareSemver(a, b) {
-  const x = parseSemver(a)
-  const y = parseSemver(b)
-  for (let i = 0; i < 3; i++) {
-    if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
-  }
-  return 0
-}
-
-/** Whether the framework SDK satisfies a plugin's minimum requirement. */
-export function sdkSatisfies(minSdkVersion) {
-  if (!minSdkVersion) return true
-  return compareSemver(SDK_VERSION, minSdkVersion) >= 0
-}
+export { SDK_VERSION, compareSemver, sdkSatisfies }
 const SCRIPT_TIMEOUT = 1500
 
 // in-memory runtime registry: `${userId}:${id}` -> { manifest, dir, registrations }

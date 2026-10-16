@@ -267,9 +267,18 @@ onUnmounted(() => {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: color-mix(in srgb, var(--md-surface) 84%, transparent);
-  backdrop-filter: blur(14px) saturate(1.3);
   border-bottom: 1px solid color-mix(in srgb, var(--md-outline-variant) 60%, transparent);
+}
+/* The blur lives on a ::before layer, so the bar itself is NOT a backdrop root.
+   Otherwise its dropdown menus (descendants) could not sample/blur the page. */
+.topbar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--topbar-bg);
+  backdrop-filter: var(--topbar-blur);
+  -webkit-backdrop-filter: var(--topbar-blur);
 }
 .topbar-inner {
   display: flex;
@@ -331,7 +340,7 @@ onUnmounted(() => {
   flex: none;
   padding: 0 16px;
   height: 40px;
-  border-radius: var(--md-shape-full);
+  border-radius: var(--nav-radius);
   color: var(--md-on-surface-variant);
   font-weight: 600;
   font-size: 0.92rem;
@@ -346,8 +355,9 @@ onUnmounted(() => {
 }
 .nav a.active,
 .mobile-nav a.active {
-  background: var(--md-secondary-container);
-  color: var(--md-on-secondary-container);
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg);
+  box-shadow: var(--nav-active-indicator);
 }
 .topbar-center {
   flex: 1 1 auto;

@@ -14,7 +14,7 @@ export interface User {
   email: string
   avatar: string
   bio: string
-  role: 'admin' | 'user'
+  role: 'super' | 'admin' | 'user'
   permissions: UserPermissions
   pluginPermissions: string[]
   created_at: string
@@ -154,6 +154,33 @@ export interface SiteSettings {
   themeSource?: 'icon' | 'banner' | 'custom'
   themeSeed?: string
   themeSeedColor?: string
+}
+
+export interface ThemeOption {
+  id: string
+  label: string
+  type: 'color' | 'text' | 'select' | 'boolean' | 'image'
+  default: unknown
+  options?: string[]
+}
+
+export interface ThemeScheme {
+  id: string
+  label: string
+  color: string
+  vars: Record<string, string>
+}
+
+export interface Theme {
+  id: string
+  name: string
+  version: string
+  author: string
+  description: string
+  preview?: string
+  minSdkVersion?: string
+  options?: ThemeOption[]
+  schemes?: ThemeScheme[]
 }
 
 export interface HomepageSettings {

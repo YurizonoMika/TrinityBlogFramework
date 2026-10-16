@@ -84,9 +84,10 @@ const TYPE_META: Record<string, { icon: string; label: string }> = {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--md-surface-container-low);
-  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent);
-  border-radius: var(--fluid-radius, var(--md-shape-2xl));
+  background: var(--card-bg);
+  border: var(--card-border, 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent));
+  border-radius: var(--card-radius, var(--fluid-radius, var(--md-shape-2xl)));
+  box-shadow: var(--card-shadow);
   padding: clamp(16px, 1.6vw, 22px);
   transition: box-shadow var(--md-dur-medium) var(--md-ease-standard),
     transform var(--md-dur-medium) var(--md-ease-expressive),

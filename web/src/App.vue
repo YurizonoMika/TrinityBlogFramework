@@ -15,6 +15,7 @@ import AppIcon from './components/AppIcon.vue'
 import { auth, can } from '@/stores/auth'
 import { loadPublicSite, applyTheme, site } from '@/stores/site'
 import { loadPlugins, plugins } from '@/lib/plugins'
+import { loadTheme } from '@/stores/theme'
 import { usePageOwner } from '@/lib/scope'
 
 const route = useRoute()
@@ -32,6 +33,10 @@ const scopeOwner = usePageOwner()
 onMounted(async () => {
   applyTheme()
   loadPlugins(scopeOwner.value)
+  // load the theme first so an embedded color scheme is known before the site
+  // palette (incl. dynamic color) is applied
+  await loadTheme(scopeOwner.value)
+  applyTheme()
   try {
     await loadPublicSite(scopeOwner.value)
   } catch {
@@ -42,14 +47,18 @@ onMounted(async () => {
 watch(
   () => auth.user,
   () => {
-    loadPublicSite(scopeOwner.value).catch(() => {})
     loadPlugins(scopeOwner.value)
+    loadTheme(scopeOwner.value)
+      .then(() => loadPublicSite(scopeOwner.value))
+      .catch(() => {})
   }
 )
 
 watch(scopeOwner, (u) => {
   loadPlugins(u)
-  loadPublicSite(u).catch(() => {})
+  loadTheme(u)
+    .then(() => loadPublicSite(u))
+    .catch(() => {})
 })
 
 watch(

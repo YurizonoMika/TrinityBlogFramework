@@ -6,7 +6,7 @@ import multer from 'multer'
 import crypto from 'node:crypto'
 import { extname } from 'node:path'
 import { db, primaryUserId } from '../db.js'
-import { requireAuth, requireAdmin, verifyToken, can, sessionUser } from '../auth.js'
+import { requireAuth, requireAdmin, verifyToken, can, sessionUser, isAdminUser } from '../auth.js'
 import { pageUsername } from '../scope.js'
 import {
   listPlugins,
@@ -45,7 +45,7 @@ const storageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSi
 function ownerFrom(req) {
   const viewer = sessionUser(req)
   if (viewer) {
-    if (viewer.role === 'admin' && req.query.username) {
+    if (isAdminUser(viewer) && req.query.username) {
       const u = db.prepare('SELECT * FROM users WHERE username = ?').get(String(req.query.username))
       if (u) return u
     }
@@ -60,7 +60,7 @@ function ownerFrom(req) {
 }
 
 function manageOwner(req) {
-  if (req.user?.role === 'admin' && req.query.username) {
+  if (isAdminUser(req.user) && req.query.username) {
     const u = db.prepare('SELECT * FROM users WHERE username = ?').get(String(req.query.username))
     if (u) return u
   }
@@ -69,7 +69,7 @@ function manageOwner(req) {
 
 function canManage(req, owner) {
   if (!req.user || !owner) return false
-  if (req.user.role === 'admin') return true
+  if (isAdminUser(req.user)) return true
   return req.user.id === owner.id && can(req.user, 'plugins')
 }
 
@@ -94,7 +94,7 @@ function canAccess(owner, id, req) {
   if (!state || !state.enabled) return false
   if (state.visitor) return true
   const user = resolvePluginUser(req, owner.id)
-  return Boolean(user && (user.role === 'admin' || user.id === owner.id))
+  return Boolean(user && (isAdminUser(user) || user.id === owner.id))
 }
 
 // ---- management ----
@@ -143,12 +143,12 @@ router.put('/:id', requireAuth, (req, res) => {
   // admin-only actions
   if (
     (patch.enabled !== undefined || patch.visitor !== undefined || patch.locked !== undefined) &&
-    req.user.role !== 'admin'
+    !isAdminUser(req.user)
   ) {
     return res.status(403).json({ error: '仅管理员可以启用插件、对访客公开或锁定插件' })
   }
   // non-admins may only grant plugin permissions the admin allowed for them
-  if (patch.permissions !== undefined && req.user.role !== 'admin') {
+  if (patch.permissions !== undefined && !isAdminUser(req.user)) {
     const allowed = new Set(allowedPluginPerms(owner))
     const bad = (Array.isArray(patch.permissions) ? patch.permissions : []).filter((p) => !allowed.has(p))
     if (bad.length) {
@@ -168,7 +168,7 @@ router.delete('/:id', requireAuth, (req, res) => {
   if (!canManage(req, owner)) return res.status(403).json({ error: '没有权限' })
   // an admin-locked plugin can only be deleted by an admin
   const locked = Boolean(getPluginStates(owner.id)[req.params.id]?.locked)
-  if (locked && req.user.role !== 'admin') {
+  if (locked && !isAdminUser(req.user)) {
     return res.status(403).json({ error: '该插件已被管理员锁定，禁止删除' })
   }
   try {
@@ -284,7 +284,7 @@ async function handleCall(req, res) {
   if (!canAccess(owner, req.params.id, req)) return res.status(404).json({ error: '插件不可用' })
   try {
     const caller = resolvePluginUser(req, owner.id)
-    const authed = Boolean(caller && (caller.role === 'admin' || caller.id === owner.id))
+    const authed = Boolean(caller && (isAdminUser(caller) || caller.id === owner.id))
     const result = await callRoute(owner.id, req.params.id, req.params.name, {
       method: req.method,
       query: req.query,
@@ -292,7 +292,7 @@ async function handleCall(req, res) {
       body: req.body,
       path: req.path,
       authed,
-      isAdmin: Boolean(caller && caller.role === 'admin'),
+      isAdmin: Boolean(caller && isAdminUser(caller)),
       viewer: caller ? { id: caller.id, username: caller.username } : null,
     })
     if (result === undefined || result === null) return res.json({ ok: true })

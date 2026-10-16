@@ -109,7 +109,7 @@ async function doDelete() {
   <div class="post-view">
     <div v-if="loading" class="md-container loading-wrap">
       <div class="skeleton" style="height: 40px; width: 60%; margin-bottom: 16px" />
-      <div class="skeleton" style="height: 300px; border-radius: 24px" />
+      <div class="skeleton" style="height: 300px; border-radius: var(--md-shape-xl)" />
     </div>
 
     <div v-else-if="notFound" class="md-container">

@@ -24,7 +24,8 @@ import {
 import { notify } from '@/stores/toast'
 import { confirmDialog } from '@/stores/dialog'
 import { loadPlugins, plugins } from '@/lib/plugins'
-import type { InstalledPlugin, LinkItem, ProfileTag } from '@/lib/types'
+import { setTheme, setThemeScheme, loadTheme, theme as activeTheme } from '@/stores/theme'
+import type { InstalledPlugin, LinkItem, ProfileTag, Theme } from '@/lib/types'
 
 const route = useRoute()
 const tab = ref<string>((route.query.tab as string) || 'profile')
@@ -69,6 +70,44 @@ interface ImportPreview {
 }
 const importPreview = ref<ImportPreview | null>(null)
 const importState = reactive<{ busy: boolean; progress: number | null }>({ busy: false, progress: null })
+
+// ---- themes ----
+const themes = ref<Theme[]>([])
+const themeChoice = ref('')
+const themeBusy = ref(false)
+const themeOptions = ref<Record<string, unknown>>({})
+const currentTheme = computed(() => themes.value.find((t) => t.id === themeChoice.value) || null)
+function resetThemeOptions() {
+  const defs = currentTheme.value?.options || []
+  const next: Record<string, unknown> = {}
+  for (const o of defs) next[o.id] = themeOptions.value[o.id] ?? o.default ?? ''
+  themeOptions.value = next
+}
+watch(themeChoice, () => resetThemeOptions())
+
+async function onThemeImage(id: string, e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const res = await uploadFile(file)
+    themeOptions.value = { ...themeOptions.value, [id]: res.url }
+  } catch (err: any) {
+    notify(err.message || '上传失败', 'error')
+  }
+}
+interface ThemePreview {
+  file: File
+  id: string
+  name: string
+  version: string
+  author: string
+  description: string
+  exists: boolean
+}
+const themePreview = ref<ThemePreview | null>(null)
+const themeImport = reactive<{ busy: boolean; progress: number | null }>({ busy: false, progress: null })
 // plugin management dialog
 const manageId = ref<string | null>(null)
 const managedPlugin = computed<InstalledPlugin | null>(
@@ -149,9 +188,10 @@ const ACCENTS = [
 
 const ICON_OPTIONS = ['link', 'github', 'steam', 'nintendo', 'globe', 'code', 'article', 'chat', 'star', 'favorite', 'person', 'image']
 
-const isAdminUser = computed(() => auth.user?.role === 'admin')
+const isAdminUser = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'super')
 const ALL_TABS = [
   { id: 'profile', label: '个人资料', icon: 'person', adminOnly: false },
+  { id: 'theme', label: '主题设置', icon: 'palette', adminOnly: false },
   { id: 'site', label: '站点外观', icon: 'palette', adminOnly: true },
   { id: 'categories', label: '博客分类', icon: 'article', adminOnly: false },
   { id: 'activity', label: '活动集成', icon: 'history', adminOnly: false },
@@ -224,6 +264,8 @@ async function load() {
   nintendo.remoteConfig = ns.remoteConfig === true
   nintendo.configUrl = ns.configUrl || ''
   account.username = p.username || ''
+  themeChoice.value = data.theme || ''
+  themeOptions.value = { ...((data as any).themeOptions || {}) }
 }
 
 onMounted(() => {
@@ -231,6 +273,7 @@ onMounted(() => {
   loadNintendoStatus()
   loadInstalledPlugins()
   loadPluginUsers()
+  loadThemes()
 })
 
 async function loadNintendoStatus() {
@@ -381,11 +424,27 @@ interface ManageUser {
   display_name: string
   email: string
   bio: string
-  role: 'admin' | 'user'
+  role: 'super' | 'admin' | 'user'
   permissions: { post?: boolean; moment?: boolean; plugins?: boolean }
   pluginPermissions: string[]
   posts: number
   moments: number
+}
+
+// who may edit a given account (super admin manages admins; admins manage users)
+function canEditUserPerms(u: ManageUser): boolean {
+  if (!auth.user) return false
+  if (u.role === 'super') return false
+  if (u.role === 'admin') return auth.user.role === 'super'
+  return isAdminUser.value
+}
+function canManageRole(u: ManageUser): boolean {
+  return auth.user?.role === 'super' && u.role !== 'super' && u.id !== auth.user.id
+}
+function canDeleteUser(u: ManageUser): boolean {
+  if (!auth.user || u.id === auth.user.id || u.role === 'super') return false
+  if (u.role === 'admin') return auth.user.role === 'super'
+  return isAdminUser.value
 }
 
 const users = ref<ManageUser[]>([])
@@ -994,6 +1053,130 @@ async function loadInstalledPlugins() {
   }
 }
 
+/* ---------------- themes ---------------- */
+async function loadThemes() {
+  try {
+    const res = await api<{ themes: Theme[] }>('/themes')
+    themes.value = res.themes || []
+  } catch {
+    /* ignore */
+  }
+}
+
+async function saveThemeChoice() {
+  saving.value = true
+  try {
+    await api('/settings/theme', {
+      method: 'PUT',
+      body: { theme: themeChoice.value, options: themeOptions.value },
+    })
+    await loadTheme(auth.user?.username || '')
+    // re-sync the whole settings form (profile / homepage banner / theme) so it
+    // can never be left stale after switching themes
+    await load()
+    notify('主题已应用', 'success')
+  } catch (e: any) {
+    notify(e.message || '保存失败', 'error')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function setScheme(id: string) {
+  themeOptions.value = { ...themeOptions.value, scheme: id }
+  setThemeScheme(id)
+  try {
+    await api('/settings/theme', {
+      method: 'PUT',
+      body: { theme: themeChoice.value, options: themeOptions.value },
+    })
+    await loadTheme(auth.user?.username || '')
+    notify('配色方案已更新', 'success')
+  } catch (e: any) {
+    notify(e.message || '保存失败', 'error')
+  }
+}
+
+async function onImportTheme(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  themeBusy.value = true
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    const { theme } = await api<{ theme: Omit<ThemePreview, 'file'> }>('/themes/inspect', {
+      method: 'POST',
+      body: form,
+      raw: true,
+    })
+    themePreview.value = { file, ...theme }
+  } catch (err: any) {
+    notify(err.message || '无法解析主题包', 'error')
+  } finally {
+    themeBusy.value = false
+  }
+}
+
+function uploadThemeZip(file: File): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    form.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/themes/import')
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest')
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && themeImport.progress !== null) themeImport.progress = ev.loaded / ev.total
+    }
+    xhr.upload.onload = () => {
+      themeImport.progress = null
+    }
+    xhr.onload = () => {
+      let data: any = null
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch {
+        data = null
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve()
+      else reject(new Error(data?.error || `导入失败 (${xhr.status})`))
+    }
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.send(form)
+  })
+}
+
+async function confirmImportTheme() {
+  const p = themePreview.value
+  if (!p) return
+  themeImport.busy = true
+  themeImport.progress = 0
+  try {
+    await uploadThemeZip(p.file)
+    themePreview.value = null
+    await loadThemes()
+    notify(`主题「${p.name}」已导入`, 'success')
+  } catch (err: any) {
+    notify(err.message || '导入失败', 'error')
+  } finally {
+    themeImport.busy = false
+    themeImport.progress = null
+  }
+}
+
+async function removeTheme(t: Theme) {
+  if (!(await confirmDialog({ title: '删除主题', message: `确定删除主题「${t.name}」吗？`, confirmText: '删除', danger: true }))) return
+  try {
+    await api(`/themes/${t.id}`, { method: 'DELETE' })
+    if (themeChoice.value === t.id) themeChoice.value = ''
+    await loadThemes()
+    notify('主题已删除', 'success')
+  } catch (e: any) {
+    notify(e.message || '删除失败', 'error')
+  }
+}
+
 async function loadPluginUsers() {
   if (!isAdminUser.value) return
   try {
@@ -1273,6 +1456,150 @@ const PERMISSION_LABELS: Record<string, string> = {
           </div>
         </section>
 
+        <!-- theme -->
+        <section v-show="tab === 'theme'" class="card">
+          <h2 class="panel-title">主题设置</h2>
+          <p class="md-muted panel-hint">
+            主题可修改站点配色、图标集，甚至 UI 元素样式与布局
+            你选择的主题<strong>仅应用于你自己的页面与插件</strong>
+          </p>
+
+          <label class="field filled">
+            <select v-model="themeChoice" class="field-input">
+              <option value="">默认（无主题）</option>
+              <option v-for="t in themes" :key="t.id" :value="t.id">
+                {{ t.name }}<template v-if="t.version"> · v{{ t.version }}</template>
+              </option>
+            </select>
+            <span class="field-label">应用主题</span>
+          </label>
+          <div class="panel-actions" style="margin-bottom: 8px">
+            <button class="btn btn-filled" :disabled="saving" @click="saveThemeChoice">
+              <AppIcon name="save" :size="17" />保存主题
+            </button>
+            <button class="btn" @click="loadTheme(auth.user?.username || '')">
+              <AppIcon name="refresh" :size="17" />重新应用
+            </button>
+          </div>
+
+          <div v-if="currentTheme && currentTheme.options && currentTheme.options.length" style="margin-top: 6px">
+            <div class="sub-head"><span class="mini-label">主题选项（{{ currentTheme.name }}）</span></div>
+            <div v-for="o in currentTheme.options" :key="o.id" class="theme-option">
+              <span class="theme-option-label">{{ o.label }}</span>
+              <label v-if="o.type === 'boolean'" class="switch">
+                <input type="checkbox" v-model="themeOptions[o.id]" />
+                <span class="switch-track"><span class="switch-thumb" /></span>
+              </label>
+              <input
+                v-else-if="o.type === 'color'"
+                type="color"
+                class="theme-color"
+                v-model="themeOptions[o.id]"
+              />
+              <select v-else-if="o.type === 'select'" class="mini-input" v-model="themeOptions[o.id]">
+                <option v-for="v in o.options || []" :key="v" :value="v">{{ v }}</option>
+              </select>
+              <div v-else-if="o.type === 'image'" class="theme-image-opt">
+                <img v-if="themeOptions[o.id]" class="theme-image-preview" :src="String(themeOptions[o.id])" alt="" />
+                <label class="btn btn-tonal btn-sm">
+                  <AppIcon name="upload" :size="15" />{{ themeOptions[o.id] ? '更换' : '上传' }}
+                  <input type="file" accept="image/*" hidden @change="onThemeImage(o.id, $event)" />
+                </label>
+                <button v-if="themeOptions[o.id]" class="btn btn-outlined btn-sm" @click="themeOptions[o.id] = ''">
+                  <AppIcon name="close" :size="15" />清除
+                </button>
+              </div>
+              <input v-else class="mini-input" v-model="themeOptions[o.id]" />
+            </div>
+            <p class="md-muted tiny">点击保存主题以生效</p>
+          </div>
+
+          <div v-if="currentTheme && currentTheme.schemes && currentTheme.schemes.length" style="margin-top: 6px">
+            <div class="sub-head"><span class="mini-label">配色方案（主题自带）</span></div>
+            <p class="md-muted tiny" style="margin: 0 0 10px">
+              该主题自带配色方案，将覆盖站点已设置的配色。
+            </p>
+            <div class="accent-row">
+              <button
+                v-for="s in currentTheme.schemes"
+                :key="s.id"
+                class="accent-swatch"
+                :class="{ active: (themeOptions.scheme || '') === s.id }"
+                :style="{ background: s.color || 'var(--md-primary)' }"
+                :title="s.label"
+                @click="setScheme(s.id)"
+              >
+                <AppIcon v-if="(themeOptions.scheme || '') === s.id" name="check" :size="18" />
+              </button>
+            </div>
+          </div>
+
+          <template v-if="isAdminUser">
+            <div class="divider" />
+            <div class="sub-head">
+              <span class="mini-label">主题库</span>
+              <label class="btn btn-tonal btn-sm">
+                <span v-if="themeBusy" class="spinner" style="width: 15px; height: 15px" />
+                <AppIcon v-else name="upload" :size="15" />导入主题（.zip）
+                <input type="file" accept=".zip,application/zip" hidden @change="onImportTheme" />
+              </label>
+            </div>
+            <p v-if="!themes.length" class="md-muted tiny">还没有导入任何主题。</p>
+            <div v-for="t in themes" :key="t.id" class="plugin-row">
+              <div class="plugin-row-main" style="display: flex; align-items: center">
+                <img v-if="t.preview" class="theme-thumb" :src="t.preview" alt="" />
+                <div>
+                <div class="plugin-name">
+                  {{ t.name }}
+                  <span class="md-muted">v{{ t.version }}</span>
+                  <span v-if="t.minSdkVersion" class="badge">SDK ≥ {{ t.minSdkVersion }}</span>
+                </div>
+                <p class="md-muted tiny">
+                  {{ t.description || '（无描述）' }}
+                  <template v-if="t.author"> · {{ t.author }}</template>
+                  · ID <code>{{ t.id }}</code>
+                </p>
+                </div>
+              </div>
+              <div class="plugin-row-actions">
+                <button class="btn btn-outlined btn-sm" @click="removeTheme(t)">
+                  <AppIcon name="delete" :size="15" />删除
+                </button>
+              </div>
+            </div>
+          </template>
+
+          <BaseDialog
+            :open="!!themePreview"
+            :title="themePreview?.exists ? '更新主题' : '导入主题'"
+            :close-on-scrim="!themeImport.busy"
+            @close="themeImport.busy ? null : (themePreview = null)"
+          >
+            <template v-if="themePreview">
+              <div class="plugin-preview">
+                <div class="preview-row"><span class="preview-key">名称</span><span class="preview-val">{{ themePreview.name }}</span></div>
+                <div class="preview-row"><span class="preview-key">ID</span><code class="preview-val">{{ themePreview.id }}</code></div>
+                <div class="preview-row"><span class="preview-key">版本</span><span class="preview-val">v{{ themePreview.version }}</span></div>
+                <div class="preview-row"><span class="preview-key">作者</span><span class="preview-val">{{ themePreview.author || '—' }}</span></div>
+                <div class="preview-row"><span class="preview-key">说明</span><span class="preview-val">{{ themePreview.description || '（无说明）' }}</span></div>
+              </div>
+              <p v-if="themePreview.exists" class="md-muted tiny" style="margin: -4px 0 12px">
+                将进行<strong>覆盖更新</strong>。
+              </p>
+              <div class="backup-progress install-progress" :class="{ show: themeImport.busy, indeterminate: themeImport.progress === null }">
+                <div class="backup-progress-fill" :style="{ width: themeImport.progress !== null ? `${Math.max(4, Math.round(themeImport.progress * 100))}%` : '' }" />
+              </div>
+            </template>
+            <template #actions>
+              <button class="btn" :disabled="themeImport.busy" @click="themePreview = null">取消</button>
+              <button class="btn btn-filled" :disabled="themeImport.busy" @click="confirmImportTheme">
+                <span v-if="themeImport.busy" class="spinner" style="width: 15px; height: 15px" />
+                <AppIcon v-else name="check" :size="16" />确认导入
+              </button>
+            </template>
+          </BaseDialog>
+        </section>
+
         <!-- site -->
         <section v-show="tab === 'site'" class="card">
           <h2 class="panel-title">站点外观</h2>
@@ -1324,6 +1651,10 @@ const PERMISSION_LABELS: Record<string, string> = {
           </div>
 
           <span class="mini-label">配色方案</span>
+          <p v-if="activeTheme.schemes.length" class="md-muted tiny" style="margin: 0 0 12px">
+            正在使用主题「{{ activeTheme.name }}」的配色方案，请在主题设置中切换主题配色。
+          </p>
+          <template v-if="!activeTheme.schemes.length">
           <div class="segmented scheme-seg">
             <button :class="{ active: themeMode === 'preset' }" @click="setThemeMode('preset')">
               <AppIcon name="palette" :size="15" />预设配色
@@ -1388,6 +1719,7 @@ const PERMISSION_LABELS: Record<string, string> = {
             <p v-else class="md-muted tiny" style="margin: 4px 0 0">
               当前从{{ themeSource === 'banner' ? '站点横幅' : '站点图标' }}取色。
             </p>
+          </template>
           </template>
 
           <div class="theme-row">
@@ -1483,7 +1815,7 @@ const PERMISSION_LABELS: Record<string, string> = {
               <span v-if="nintendoStatus.linked" class="badge success">已绑定</span>
             </div>
 
-            <div v-if="nintendoStatus.loading" class="skeleton" style="height: 60px; border-radius: 16px" />
+            <div v-if="nintendoStatus.loading" class="skeleton" style="height: 60px; border-radius: var(--md-shape-lg)" />
 
             <template v-else-if="nintendoStatus.linked">
               <div class="nso-account">
@@ -1936,7 +2268,7 @@ const PERMISSION_LABELS: Record<string, string> = {
           </div>
           <p class="md-muted panel-hint">管理站点用户与权限（发帖 / 发动态 / 安装插件）。</p>
 
-          <div v-if="usersLoading" class="skeleton" style="height: 120px; border-radius: 20px" />
+          <div v-if="usersLoading" class="skeleton" style="height: 120px; border-radius: var(--md-shape-xl)" />
           <div v-else class="user-list">
             <div v-for="u in users" :key="u.id" class="user-row">
               <router-link class="user-id" :to="`/user/${u.username}`" :title="`进入 @${u.username} 的主页`">
@@ -1944,27 +2276,28 @@ const PERMISSION_LABELS: Record<string, string> = {
                 <div class="user-main">
                   <div class="user-name">
                     {{ u.display_name || u.username }}
-                    <span v-if="u.role === 'admin'" class="badge">管理员</span>
+                    <span v-if="u.role === 'super'" class="badge success">超级管理员</span>
+                    <span v-else-if="u.role === 'admin'" class="badge">管理员</span>
                   </div>
                   <div class="md-muted tiny">@{{ u.username }} · {{ u.posts }} 帖 · {{ u.moments }} 动态</div>
                 </div>
               </router-link>
               <div class="user-perms">
-                <label class="perm"><input type="checkbox" :checked="u.role === 'admin' || u.permissions?.post" :disabled="u.role === 'admin'" @change="toggleUserPermission(u, 'post')" />发帖</label>
-                <label class="perm"><input type="checkbox" :checked="u.role === 'admin' || u.permissions?.moment" :disabled="u.role === 'admin'" @change="toggleUserPermission(u, 'moment')" />动态</label>
-                <label class="perm"><input type="checkbox" :checked="u.role === 'admin' || u.permissions?.plugins" :disabled="u.role === 'admin'" @change="toggleUserPermission(u, 'plugins')" />插件</label>
+                <label class="perm"><input type="checkbox" :checked="u.role !== 'user' || u.permissions?.post" :disabled="!canEditUserPerms(u)" @change="toggleUserPermission(u, 'post')" />发帖</label>
+                <label class="perm"><input type="checkbox" :checked="u.role !== 'user' || u.permissions?.moment" :disabled="!canEditUserPerms(u)" @change="toggleUserPermission(u, 'moment')" />动态</label>
+                <label class="perm"><input type="checkbox" :checked="u.role !== 'user' || u.permissions?.plugins" :disabled="!canEditUserPerms(u)" @change="toggleUserPermission(u, 'plugins')" />插件</label>
               </div>
               <div class="user-actions">
                 <button class="btn btn-outlined btn-sm" @click="openUserPosts(u)">
                   <AppIcon name="article" :size="15" />帖子
                 </button>
-                <button class="btn btn-outlined btn-sm" @click="openPluginPerms(u)">
+                <button v-if="canEditUserPerms(u)" class="btn btn-outlined btn-sm" @click="openPluginPerms(u)">
                   <AppIcon name="extension" :size="15" />插件权限
                 </button>
-                <button class="btn btn-outlined btn-sm" @click="setUserRole(u, u.role === 'admin' ? 'user' : 'admin')">
+                <button v-if="canManageRole(u)" class="btn btn-outlined btn-sm" @click="setUserRole(u, u.role === 'admin' ? 'user' : 'admin')">
                   {{ u.role === 'admin' ? '设为普通' : '设为管理员' }}
                 </button>
-                <button class="icon-btn sm danger" title="删除用户" @click="deleteUser(u)">
+                <button v-if="canDeleteUser(u)" class="icon-btn sm danger" title="删除用户" @click="deleteUser(u)">
                   <AppIcon name="delete" :size="17" />
                 </button>
               </div>
@@ -1980,7 +2313,7 @@ const PERMISSION_LABELS: Record<string, string> = {
             {{ isAdminUser ? '查看服务器磁盘、站点与各用户占用，并清理不需要的空间。' : '查看服务器磁盘与你自己的存储占用。' }}
           </p>
 
-          <div v-if="storageLoading || !storage" class="skeleton" style="height: 160px; border-radius: 20px" />
+          <div v-if="storageLoading || !storage" class="skeleton" style="height: 160px; border-radius: var(--md-shape-xl)" />
           <template v-else>
             <div class="storage-block">
               <div class="storage-row-head">
@@ -2116,7 +2449,7 @@ const PERMISSION_LABELS: Record<string, string> = {
       wide
       @close="postsDialog.open = false"
     >
-      <div v-if="postsDialog.loading" class="skeleton" style="height: 100px; border-radius: 16px" />
+      <div v-if="postsDialog.loading" class="skeleton" style="height: 100px; border-radius: var(--md-shape-lg)" />
       <div v-else class="user-posts">
         <div v-for="p in postsDialog.posts" :key="p.id" class="user-post-row">
           <div class="up-main">
@@ -2250,21 +2583,24 @@ const PERMISSION_LABELS: Record<string, string> = {
   height: 48px;
   padding: 0 18px;
   border: none;
-  border-radius: var(--md-shape-full);
+  border-radius: var(--sidenav-radius);
   background: transparent;
   color: var(--md-on-surface-variant);
   font-weight: 600;
   font-size: 0.92rem;
   cursor: pointer;
   text-align: left;
-  transition: background-color var(--md-dur-short) var(--md-ease-standard);
+  box-shadow: var(--sidenav-active-indicator);
+  transition: background-color var(--md-dur-short) var(--md-ease-standard),
+    box-shadow var(--md-dur-short) var(--md-ease-standard);
 }
 .nav-item:hover {
   background: color-mix(in srgb, var(--md-on-surface) 7%, transparent);
 }
 .nav-item.active {
-  background: var(--md-secondary-container);
-  color: var(--md-on-secondary-container);
+  background: var(--sidenav-active-bg);
+  color: var(--sidenav-active-fg);
+  box-shadow: var(--sidenav-active-indicator);
 }
 .settings-panel .card {
   padding: 28px;
@@ -2640,7 +2976,7 @@ const PERMISSION_LABELS: Record<string, string> = {
 /* ---------------- storage ---------------- */
 .storage-block {
   padding: 16px;
-  border-radius: 20px;
+  border-radius: var(--md-shape-xl);
   background: var(--md-surface-container-low);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 45%, transparent);
   margin-bottom: 14px;
@@ -2654,13 +2990,13 @@ const PERMISSION_LABELS: Record<string, string> = {
 }
 .storage-bar {
   height: 10px;
-  border-radius: 999px;
+  border-radius: var(--md-shape-full);
   background: var(--md-surface-container-highest);
   overflow: hidden;
 }
 .storage-bar-fill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--md-shape-full);
   background: linear-gradient(90deg, var(--md-primary), var(--md-tertiary));
   transition: width var(--md-dur-long) var(--md-ease-emphasized);
 }
@@ -2689,7 +3025,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: 16px;
+  border-radius: var(--md-shape-lg);
   background: var(--md-surface-container-high);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 45%, transparent);
 }
@@ -2699,7 +3035,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   flex: none;
   display: grid;
   place-items: center;
-  border-radius: 12px;
+  border-radius: var(--md-shape-md);
   background: var(--md-secondary-container);
   color: var(--md-on-secondary-container);
 }
@@ -2735,14 +3071,14 @@ const PERMISSION_LABELS: Record<string, string> = {
 /* ---------------- users ---------------- */
 .user-list { display: flex; flex-direction: column; gap: 8px; }
 .user-row {
-  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 18px;
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--md-shape-lg);
   background: var(--md-surface-container-high);
   border: 1px solid color-mix(in srgb, var(--md-outline-variant) 45%, transparent);
   flex-wrap: wrap;
 }
 .user-id {
   display: flex; align-items: center; gap: 12px; flex: 1; min-width: 160px;
-  color: inherit; text-decoration: none; border-radius: 14px; padding: 2px 4px; margin: -2px -4px;
+  color: inherit; text-decoration: none; border-radius: var(--md-shape-md); padding: 2px 4px; margin: -2px -4px;
   transition: background-color var(--md-dur-short) var(--md-ease-standard);
 }
 .user-id:hover { background: color-mix(in srgb, var(--md-primary) 8%, transparent); text-decoration: none; }
@@ -2757,7 +3093,7 @@ const PERMISSION_LABELS: Record<string, string> = {
 .perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 16px; margin: 8px 0; }
 .user-posts { display: flex; flex-direction: column; gap: 6px; }
 .user-post-row {
-  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px;
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--md-shape-md);
   background: var(--md-surface-container-high);
 }
 .up-main { flex: 1; min-width: 0; }
@@ -2841,5 +3177,46 @@ code.preview-val {
   display: flex;
   gap: 8px;
   flex: none;
+}
+.theme-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+}
+.theme-option-label {
+  font-size: 0.88rem;
+  color: var(--md-on-surface);
+}
+.theme-color {
+  width: 48px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+.theme-thumb {
+  width: 84px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 8px;
+  margin-right: 12px;
+  border: 1px solid var(--md-outline-variant);
+  flex: none;
+}
+.theme-image-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.theme-image-preview {
+  width: 64px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--md-outline-variant);
 }
 </style>

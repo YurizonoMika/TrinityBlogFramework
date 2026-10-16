@@ -5,6 +5,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/lib/api'
 import { auth } from '@/stores/auth'
+import { theme } from '@/stores/theme'
 import { alertDialog, confirmDialog } from '@/stores/dialog'
 import type { RuntimePlugin } from '@/lib/types'
 
@@ -86,8 +87,8 @@ const FRAMEWORK_CSS = `
   h1,h2,h3 { margin: 0 0 .4em; line-height: 1.25; }
   p { margin: .5em 0; color: var(--md-on-surface-variant); }
   a { color: var(--md-primary); }
-  .card { background: var(--md-surface-container-low); border-radius: 24px; padding: 18px; border: 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent); }
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 0 18px; border: none; border-radius: 999px; background: transparent; color: var(--md-primary); font-weight: 600; cursor: pointer; }
+  .card { background: var(--md-surface-container-low); border-radius: var(--md-shape-xl); padding: 18px; border: 1px solid color-mix(in srgb, var(--md-outline-variant) 50%, transparent); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 0 18px; border: none; border-radius: var(--md-shape-full); background: transparent; color: var(--md-primary); font-weight: 600; cursor: pointer; }
   .btn-filled { background: var(--md-primary); color: var(--md-on-primary); }
   .btn-tonal { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
   .btn-outlined { border: 1px solid var(--md-outline); }
@@ -95,7 +96,7 @@ const FRAMEWORK_CSS = `
   .btn-sm { min-height: 32px; padding: 0 12px; font-size: .82rem; }
   .chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; background: var(--md-secondary-container); color: var(--md-on-secondary-container); font-size: .8rem; border: none; cursor: pointer; }
   .chip.active { background: var(--md-primary); color: var(--md-on-primary); }
-  .badge { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: .68rem; font-weight: 700; background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+  .badge { display: inline-flex; padding: 2px 8px; border-radius: var(--md-shape-full); font-size: .68rem; font-weight: 700; background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
   input, select, textarea { font: inherit; color: inherit; }
   code, pre { font-family: var(--md-font-mono, monospace); background: var(--md-surface-container-high); border-radius: 8px; }
   code { padding: 2px 6px; }
@@ -104,6 +105,22 @@ const FRAMEWORK_CSS = `
 
 function unwrap(r: any) {
   return r && typeof r === 'object' && 'data' in r ? r.data : r
+}
+
+/** Link the active theme stylesheet into a plugin's shadow root. */
+function applyShadowTheme(root: ShadowRoot) {
+  let link = root.querySelector('link.oc-plugin-theme') as HTMLLinkElement | null
+  if (theme.hasCss && theme.cssUrl) {
+    if (!link) {
+      link = document.createElement('link')
+      link.rel = 'stylesheet'
+      link.className = 'oc-plugin-theme'
+      root.appendChild(link)
+    }
+    if (link.getAttribute('href') !== theme.cssUrl) link.setAttribute('href', theme.cssUrl)
+  } else if (link) {
+    link.remove()
+  }
 }
 
 function makeApi(pluginId: string, owner: string) {
@@ -231,9 +248,13 @@ async function load() {
       const host = hostRef.value
       if (host) {
         const root = host.shadowRoot || host.attachShadow({ mode: 'open' })
-        root.innerHTML =
-          `<style>${FRAMEWORK_CSS}</style>` +
-          (template ? interpolate(stripScripts(template), data || {}) : '')
+        // reserved <style> slot for the framework base; the active theme is
+        // linked (so a theme also styles the native UI components plugins render
+        // through, and its relative assets/fonts resolve)
+        root.innerHTML = `<style></style>` + (template ? interpolate(stripScripts(template), data || {}) : '')
+        const base = root.querySelector('style')
+        if (base) base.textContent = FRAMEWORK_CSS
+        applyShadowTheme(root)
         if (props.plugin.hasJs) {
           try {
             const mod = await import(
@@ -275,6 +296,14 @@ watch(
     if (started.value) load()
   }
 )
+// keep the plugin's shadow DOM in sync when the active theme changes
+watch(
+  () => `${theme.id}:${theme.cssUrl}`,
+  () => {
+    const root = hostRef.value?.shadowRoot
+    if (root) applyShadowTheme(root)
+  }
+)
 </script>
 
 <template>
@@ -284,8 +313,8 @@ watch(
       class="skeleton"
       :style="
         kind === 'topbar'
-          ? 'height: 42px; width: 128px; border-radius: 999px'
-          : 'height: 84px; border-radius: 20px'
+          ? 'height: 42px; width: 128px; border-radius: var(--md-shape-full)'
+          : 'height: 84px; border-radius: var(--md-shape-xl)'
       "
     />
     <div v-else-if="error" class="plugin-error md-muted">插件加载失败：{{ error }}</div>

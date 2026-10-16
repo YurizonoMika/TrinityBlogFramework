@@ -51,17 +51,29 @@ export function publicUser(user) {
   }
 }
 
-/** Whether a user has a capability (admins have everything). */
+/** Administrator (admin) or super administrator (super). */
+export function isAdminUser(user) {
+  return Boolean(user && (user.role === 'admin' || user.role === 'super'))
+}
+
+/** Whether a user has a capability (admins & super admins have everything). */
 export function can(user, cap) {
   if (!user) return false
-  if (user.role === 'admin') return true
+  if (isAdminUser(user)) return true
   const perms = safeParse(user.permissions, {})
   return Boolean(perms[cap])
 }
 
 export function requireAdmin(req, res, next) {
   if (!req.user) return res.status(401).json({ error: '未登录' })
-  if (req.user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' })
+  if (!isAdminUser(req.user)) return res.status(403).json({ error: '需要管理员权限' })
+  next()
+}
+
+/** Only the single super administrator (site owner). */
+export function requireSuper(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: '未登录' })
+  if (req.user.role !== 'super') return res.status(403).json({ error: '需要超级管理员权限' })
   next()
 }
 

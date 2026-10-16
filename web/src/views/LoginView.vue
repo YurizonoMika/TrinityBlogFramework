@@ -85,6 +85,7 @@ async function submit() {
   padding: 36px 32px;
   border-radius: var(--md-shape-2xl);
   background: color-mix(in srgb, var(--md-surface-container-low) 88%, transparent);
+  -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
   box-shadow: var(--md-elev-2);
   animation: pop-in var(--md-dur-long) var(--md-ease-expressive);

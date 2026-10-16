@@ -271,7 +271,6 @@ watch(paletteOpen, (v) => {
   align-items: flex-start;
   padding: 12vh 16px 16px;
   background: var(--md-scrim);
-  backdrop-filter: blur(3px);
 }
 .palette {
   width: min(640px, 100%);

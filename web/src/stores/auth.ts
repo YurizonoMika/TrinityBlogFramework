@@ -29,13 +29,17 @@ export function isLoggedIn(): boolean {
 }
 
 export function isAdmin(): boolean {
-  return auth.user?.role === 'admin'
+  return auth.user?.role === 'admin' || auth.user?.role === 'super'
+}
+
+export function isSuper(): boolean {
+  return auth.user?.role === 'super'
 }
 
 /** Whether the current user has a capability (admins always do). */
 export function can(cap: 'post' | 'moment' | 'plugins'): boolean {
   if (!auth.user) return false
-  if (auth.user.role === 'admin') return true
+  if (auth.user.role === 'admin' || auth.user.role === 'super') return true
   return Boolean(auth.user.permissions?.[cap])
 }
 

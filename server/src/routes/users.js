@@ -3,7 +3,7 @@
 
 import { Router } from 'express'
 import { db } from '../db.js'
-import { hashPassword, publicUser, requireAuth, requireAdmin } from '../auth.js'
+import { hashPassword, publicUser, requireAuth, requireAdmin, isAdminUser } from '../auth.js'
 
 const router = Router()
 
@@ -60,7 +60,8 @@ router.post('/', requireAuth, requireAdmin, (req, res) => {
   if (db.prepare('SELECT id FROM users WHERE username = ?').get(username)) {
     return res.status(409).json({ error: '用户名已被占用' })
   }
-  const role = body.role === 'admin' ? 'admin' : 'user'
+  // only a super admin may create an admin; the super role is never assignable
+  const role = req.user.role === 'super' && body.role === 'admin' ? 'admin' : 'user'
   const permissions = normalizePermissions(body.permissions)
   const pluginPermissions = Array.isArray(body.pluginPermissions)
     ? body.pluginPermissions.map(String)
@@ -88,6 +89,36 @@ router.put('/:id', requireAuth, requireAdmin, (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id)
   if (!target) return res.status(404).json({ error: '用户不存在' })
   const body = req.body || {}
+  const me = req.user
+  const isSelf = me.id === target.id
+  const actingSuper = me.role === 'super'
+
+  // the super admin is unique — only they may edit their own account
+  if (target.role === 'super' && !isSelf) {
+    return res.status(403).json({ error: '不能修改超级管理员账户' })
+  }
+  // admins may manage regular users only; other admins require the super admin
+  if (target.role === 'admin' && !actingSuper && !isSelf) {
+    return res.status(403).json({ error: '仅超级管理员可以管理管理员账户' })
+  }
+
+  // role changes are super-admin only; the 'super' role is never assignable
+  const wantsRole = body.role !== undefined
+  const role = wantsRole ? (body.role === 'admin' ? 'admin' : 'user') : target.role
+  if (wantsRole && role !== target.role && !actingSuper) {
+    return res.status(403).json({ error: '仅超级管理员可以变更角色' })
+  }
+  if (target.role === 'super' && role !== 'super') {
+    return res.status(400).json({ error: '不能降级超级管理员' })
+  }
+  // only the super admin may change an administrator's permissions
+  if (
+    target.role === 'admin' &&
+    !actingSuper &&
+    (body.permissions !== undefined || body.pluginPermissions !== undefined)
+  ) {
+    return res.status(403).json({ error: '仅超级管理员可以修改管理员权限' })
+  }
 
   const username = body.username !== undefined ? String(body.username).trim() : target.username
   if (username !== target.username) {
@@ -97,13 +128,6 @@ router.put('/:id', requireAuth, requireAdmin, (req, res) => {
     if (db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, target.id)) {
       return res.status(409).json({ error: '用户名已被占用' })
     }
-  }
-
-  let role = body.role !== undefined ? (body.role === 'admin' ? 'admin' : 'user') : target.role
-  // never leave the site without an admin
-  if (target.role === 'admin' && role !== 'admin') {
-    const admins = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n
-    if (admins <= 1) return res.status(400).json({ error: '至少需要保留一名管理员' })
   }
 
   const permissions =
@@ -136,9 +160,9 @@ router.delete('/:id', requireAuth, requireAdmin, (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id)
   if (!target) return res.status(404).json({ error: '用户不存在' })
   if (target.id === req.user.id) return res.status(400).json({ error: '不能删除自己' })
-  if (target.role === 'admin') {
-    const admins = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get().n
-    if (admins <= 1) return res.status(400).json({ error: '至少需要保留一名管理员' })
+  if (target.role === 'super') return res.status(400).json({ error: '不能删除超级管理员' })
+  if (target.role === 'admin' && req.user.role !== 'super') {
+    return res.status(403).json({ error: '仅超级管理员可以删除管理员' })
   }
   db.prepare('DELETE FROM users WHERE id = ?').run(target.id)
   db.prepare('DELETE FROM cards WHERE user_id = ?').run(target.id)

@@ -39,6 +39,37 @@
   --section-space: clamp(28px, 6vw, 64px);
   --fluid-radius: clamp(16px, 2.4vw, 28px);
   --card-basis: clamp(300px, 44%, 560px);
+
+  /* ---- themeable component hooks (themes override these) ---- */
+  --btn-radius: var(--md-shape-full);
+  --btn-radius-pressed: var(--md-shape-xl);
+  --icon-btn-radius: var(--md-shape-full);
+  --card-radius: var(--md-shape-2xl);
+  --chip-radius: var(--md-shape-sm);
+  --segment-radius: var(--md-shape-full);
+  --field-radius: var(--md-shape-xs);
+  --menu-radius: var(--md-shape-md);
+  --dialog-radius: var(--md-shape-2xl);
+  --fab-radius: var(--md-shape-lg);
+  --fab-radius-hover: var(--md-shape-2xl);
+  --snackbar-radius: var(--md-shape-sm);
+  --badge-radius: var(--md-shape-full);
+  --switch-radius: var(--md-shape-full);
+  --nav-radius: var(--md-shape-full);
+  --card-shadow: none;
+  --card-border: 0 solid transparent;
+  --card-bg: var(--md-surface-container-low);
+  --topbar-bg: color-mix(in srgb, var(--md-surface) 84%, transparent);
+  --topbar-blur: blur(14px) saturate(1.3);
+  --nav-active-bg: var(--md-secondary-container);
+  --nav-active-fg: var(--md-on-secondary-container);
+  --nav-active-indicator: inset 0 0 0 0 transparent;
+  /* vertical side navigation (settings) */
+  --sidenav-radius: var(--md-shape-full);
+  --sidenav-active-bg: var(--md-secondary-container);
+  --sidenav-active-fg: var(--md-on-secondary-container);
+  --sidenav-active-indicator: inset 0 0 0 0 transparent;
+  --focus-ring: 2px solid var(--md-primary);
 }
 
 /* ---------- accent palettes: light ---------- */

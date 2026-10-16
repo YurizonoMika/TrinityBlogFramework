@@ -10,6 +10,7 @@ import {
   loadDynamicThemeFromHex,
   loadDynamicThemeFromImage,
 } from '@/lib/dynamicTheme'
+import { hasThemeSchemes } from './theme'
 import type {
   HomepageSettings,
   Integrations,
@@ -43,12 +44,14 @@ export const site = reactive<SiteState>({
 
 export function applyTheme() {
   document.documentElement.dataset.theme = site.theme
-  document.documentElement.dataset.accent = site.site.accent || 'violet'
+  // a theme that embeds color schemes owns the palette and overrides the site default
+  const themed = hasThemeSchemes()
+  if (!themed) document.documentElement.dataset.accent = site.site.accent || 'violet'
   applyFavicon()
 
-  if (site.site.themeMode === 'dynamic' && hasDynamicTheme()) {
+  if (!themed && site.site.themeMode === 'dynamic' && hasDynamicTheme()) {
     applyDynamicVars(site.theme)
-  } else if (site.site.themeMode !== 'dynamic') {
+  } else if (site.site.themeMode !== 'dynamic' || themed) {
     clearDynamicTheme()
   }
 
@@ -63,6 +66,12 @@ export function applyTheme() {
 
 /** Resolve the dynamic-color source image and (re)build the theme. */
 export async function applyDynamic() {
+  if (hasThemeSchemes()) {
+    // the active theme provides its own palettes — never let dynamic override them
+    clearDynamicTheme()
+    applyTheme()
+    return
+  }
   if (site.site.themeMode === 'dynamic') {
     if (site.site.themeSeedColor) {
       // Seed computed server-side — no canvas/CORS involved.
@@ -135,6 +144,7 @@ export async function loadFullSettings() {
     categories: string[]
     profile: any
     homepage: HomepageSettings
+    theme?: string
   }>('/settings')
   site.site = data.site || {}
   site.integrations = data.integrations || {}

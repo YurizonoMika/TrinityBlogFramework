@@ -13,7 +13,7 @@
   min-height: 40px;
   padding: 0 22px;
   border: none;
-  border-radius: var(--md-shape-full);
+  border-radius: var(--btn-radius);
   background: var(--btn-bg);
   color: var(--btn-fg);
   font-size: 0.92rem;
@@ -31,7 +31,7 @@
 }
 .btn:active {
   transform: scale(0.96);
-  border-radius: var(--md-shape-xl);
+  border-radius: var(--btn-radius-pressed);
 }
 .btn:disabled {
   opacity: 0.38;
@@ -76,7 +76,7 @@
   width: 40px;
   height: 40px;
   border: none;
-  border-radius: var(--md-shape-full);
+  border-radius: var(--icon-btn-radius);
   background: transparent;
   color: var(--md-on-surface-variant);
   cursor: pointer;
@@ -113,7 +113,7 @@
   height: 56px;
   padding: 0 20px;
   border: none;
-  border-radius: var(--md-shape-lg);
+  border-radius: var(--fab-radius);
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
   font-weight: 600;
@@ -124,13 +124,15 @@
 }
 .fab:hover {
   transform: translateY(-2px) scale(1.02);
-  border-radius: var(--md-shape-2xl);
+  border-radius: var(--fab-radius-hover);
 }
 
 /* ---------- cards ---------- */
 .card {
-  background: var(--md-surface-container-low);
-  border-radius: var(--md-shape-2xl);
+  background: var(--card-bg);
+  border: var(--card-border);
+  box-shadow: var(--card-shadow);
+  border-radius: var(--card-radius);
   padding: 20px;
   color: var(--md-on-surface);
 }
@@ -156,7 +158,7 @@
   min-height: 56px;
   padding: 24px 16px 8px;
   border: none;
-  border-radius: var(--md-shape-xs) var(--md-shape-xs) 0 0;
+  border-radius: var(--field-radius) var(--field-radius) 0 0;
   background: var(--md-surface-container-highest);
   color: var(--md-on-surface);
   border-bottom: 1px solid var(--md-on-surface-variant);
@@ -194,7 +196,7 @@
   color: var(--md-primary);
 }
 .field.outlined > .field-input {
-  border-radius: var(--md-shape-xs);
+  border-radius: var(--field-radius);
   background: transparent;
   border: 1px solid var(--md-outline);
 }
@@ -227,7 +229,7 @@
   position: relative;
   width: 52px;
   height: 32px;
-  border-radius: var(--md-shape-full);
+  border-radius: var(--switch-radius);
   background: var(--md-surface-container-highest);
   border: 2px solid var(--md-outline);
   transition: background-color var(--md-dur-medium) var(--md-ease-emphasized),
@@ -267,7 +269,7 @@
   height: 32px;
   padding: 0 12px;
   border: 1px solid var(--md-outline-variant);
-  border-radius: var(--md-shape-sm);
+  border-radius: var(--chip-radius);
   background: transparent;
   color: var(--md-on-surface-variant);
   font-size: 0.82rem;
@@ -297,7 +299,7 @@
 .segmented {
   display: inline-flex;
   padding: 4px;
-  border-radius: var(--md-shape-full);
+  border-radius: var(--segment-radius);
   background: var(--md-surface-container-high);
   gap: 2px;
 }
@@ -307,7 +309,7 @@
   color: var(--md-on-surface-variant);
   padding: 0 16px;
   height: 36px;
-  border-radius: var(--md-shape-full);
+  border-radius: var(--segment-radius);
   font-weight: 600;
   cursor: pointer;
   transition: background-color var(--md-dur-short) var(--md-ease-standard);
@@ -326,7 +328,6 @@
   place-items: center;
   padding: 16px;
   background: var(--md-scrim);
-  backdrop-filter: blur(2px);
   animation: fade-in var(--md-dur-medium) var(--md-ease-standard);
 }
 .dialog {
@@ -334,7 +335,7 @@
   max-height: min(86vh, 900px);
   overflow: auto;
   background: var(--md-surface-container-high);
-  border-radius: var(--md-shape-2xl);
+  border-radius: var(--dialog-radius);
   padding: 24px;
   box-shadow: var(--md-elev-3);
   animation: pop-in var(--md-dur-medium) var(--md-ease-expressive);
@@ -369,7 +370,7 @@
   z-index: 90;
   min-width: 200px;
   padding: 6px;
-  border-radius: var(--md-shape-md);
+  border-radius: var(--menu-radius);
   background: var(--md-surface-container-high);
   box-shadow: var(--md-elev-2);
   animation: pop-in var(--md-dur-short) var(--md-ease-emphasized);
@@ -420,7 +421,7 @@
   gap: 12px;
   min-height: 48px;
   padding: 0 16px;
-  border-radius: var(--md-shape-sm);
+  border-radius: var(--snackbar-radius);
   background: var(--md-inverse-surface);
   color: var(--md-inverse-on-surface);
   box-shadow: var(--md-elev-3);
@@ -464,7 +465,7 @@
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
-  border-radius: var(--md-shape-full);
+  border-radius: var(--badge-radius);
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.03em;

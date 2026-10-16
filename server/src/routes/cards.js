@@ -4,7 +4,7 @@
 import { Router } from 'express'
 import crypto from 'node:crypto'
 import { db, primaryUserId } from '../db.js'
-import { requireAuth } from '../auth.js'
+import { requireAuth, isAdminUser } from '../auth.js'
 import { pageUsername } from '../scope.js'
 
 const router = Router()
@@ -29,7 +29,7 @@ function isValidCardType(type) {
 
 /** Which user's cards this request targets (admins may manage any user). */
 function targetUserId(req) {
-  if (req.user?.role === 'admin' && req.query.userId) return Number(req.query.userId)
+  if (isAdminUser(req.user) && req.query.userId) return Number(req.query.userId)
   return req.user ? req.user.id : primaryUserId()
 }
 

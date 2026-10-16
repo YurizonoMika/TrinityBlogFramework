@@ -3,14 +3,14 @@
 
 import { Router } from 'express'
 import { db, primaryUserId } from '../db.js'
-import { requireAuth, can, sessionUser } from '../auth.js'
+import { requireAuth, can, sessionUser, isAdminUser } from '../auth.js'
 import { pageUsername } from '../scope.js'
 
 const router = Router()
 
 function ownsOrAdmin(user, row) {
   if (!user) return false
-  if (user.role === 'admin') return true
+  if (isAdminUser(user)) return true
   return row.author_id != null && row.author_id === user.id
 }
 
@@ -64,7 +64,7 @@ router.get('/', (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 200)
   const me = viewer(req)
   // `all=1` is admin-only — regular users may only list their *own* drafts
-  const seeAll = req.query.all === '1' && me?.role === 'admin'
+  const seeAll = req.query.all === '1' && isAdminUser(me)
   const selfOnly = Boolean(me) && !seeAll
   const category = (req.query.category || '').trim()
 
@@ -116,7 +116,7 @@ router.get('/:slug', (req, res) => {
   // drafts / hidden posts are visible to their author and admins only
   if (row.status !== 'published') {
     const me = viewer(req)
-    const allowed = me?.role === 'admin' || (me && me.id === row.author_id)
+    const allowed = isAdminUser(me) || (me && me.id === row.author_id)
     if (!allowed) return res.status(404).json({ error: '帖子不存在' })
   }
   if (row.status === 'published') {
