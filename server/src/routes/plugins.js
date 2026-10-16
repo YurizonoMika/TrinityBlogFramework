@@ -106,8 +106,9 @@ router.get('/manage', requireAuth, (req, res) => {
 
 router.post('/inspect', requireAuth, requireAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '没有收到文件' })
+  const owner = manageOwner(req)
   try {
-    res.json({ plugin: inspectPlugin(req.file.buffer) })
+    res.json({ plugin: inspectPlugin(req.file.buffer, owner ? owner.id : null) })
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) })
   }

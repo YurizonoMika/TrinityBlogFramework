@@ -61,6 +61,11 @@ interface ImportPreview {
   description: string
   author: string
   permissions: string[]
+  minSdkVersion: string
+  sdkVersion: string
+  sdkOk: boolean
+  update: boolean
+  existingVersion: string | null
 }
 const importPreview = ref<ImportPreview | null>(null)
 const importState = reactive<{ busy: boolean; progress: number | null }>({ busy: false, progress: null })
@@ -1061,7 +1066,10 @@ async function confirmImportPlugin() {
     importPreview.value = null
     await loadInstalledPlugins()
     await loadPlugins()
-    notify(`插件「${p.name}」已安装，请在下方启用`, 'success')
+    notify(
+      p.update ? `插件「${p.name}」已更新至 v${p.version}` : `插件「${p.name}」已安装，请在下方启用`,
+      'success'
+    )
   } catch (err: any) {
     notify(err.message || '安装失败', 'error')
   } finally {
@@ -1666,7 +1674,7 @@ const PERMISSION_LABELS: Record<string, string> = {
           <!-- install confirmation -->
           <BaseDialog
             :open="!!importPreview"
-            title="安装插件"
+            :title="importPreview?.update ? '更新插件' : '安装插件'"
             :close-on-scrim="!importState.busy"
             @close="closeImportPreview"
           >
@@ -1682,7 +1690,15 @@ const PERMISSION_LABELS: Record<string, string> = {
                 </div>
                 <div class="preview-row">
                   <span class="preview-key">版本</span>
-                  <span class="preview-val">v{{ importPreview.version }}</span>
+                  <span class="preview-val">
+                    <template v-if="importPreview.update && importPreview.existingVersion && importPreview.existingVersion !== importPreview.version">
+                      <span class="md-muted">v{{ importPreview.existingVersion }}</span>
+                      <AppIcon name="arrow_back" :size="14" style="transform: rotate(180deg); vertical-align: middle; margin: 0 4px" />
+                      <strong>v{{ importPreview.version }}</strong>
+                      <span class="badge success" style="margin-left: 8px">更新</span>
+                    </template>
+                    <template v-else>v{{ importPreview.version }}</template>
+                  </span>
                 </div>
                 <div class="preview-row">
                   <span class="preview-key">作者</span>
@@ -1692,7 +1708,19 @@ const PERMISSION_LABELS: Record<string, string> = {
                   <span class="preview-key">说明</span>
                   <span class="preview-val">{{ importPreview.description || '（无说明）' }}</span>
                 </div>
+                <div v-if="importPreview.minSdkVersion" class="preview-row">
+                  <span class="preview-key">SDK 要求</span>
+                  <span class="preview-val" :style="importPreview.sdkOk ? '' : 'color:var(--md-error)'">
+                    ≥ {{ importPreview.minSdkVersion }}（当前 {{ importPreview.sdkVersion }}）
+                    <span v-if="!importPreview.sdkOk"> · 不满足，无法安装</span>
+                    <span v-else class="badge success" style="margin-left: 8px">满足</span>
+                  </span>
+                </div>
               </div>
+
+              <p v-if="importPreview.update" class="md-muted tiny" style="margin: -4px 0 12px">
+                已安装同 ID 插件，本次将视为<strong>更新</strong>并覆盖其代码。
+              </p>
 
               <div class="preview-perms">
                 <span class="mini-label">申请的权限</span>
@@ -1721,14 +1749,18 @@ const PERMISSION_LABELS: Record<string, string> = {
                   :style="{ width: importState.progress !== null ? `${Math.max(4, Math.round(importState.progress * 100))}%` : '' }"
                 />
               </div>
-              <p v-if="importState.busy" class="md-muted tiny">正在安装…</p>
+              <p v-if="importState.busy" class="md-muted tiny">{{ importPreview.update ? '正在更新…' : '正在安装…' }}</p>
             </template>
 
             <template #actions>
               <button class="btn" :disabled="importState.busy" @click="closeImportPreview">取消</button>
-              <button class="btn btn-filled" :disabled="importState.busy" @click="confirmImportPlugin">
+              <button
+                class="btn btn-filled"
+                :disabled="importState.busy || (importPreview ? !importPreview.sdkOk : false)"
+                @click="confirmImportPlugin"
+              >
                 <span v-if="importState.busy" class="spinner" style="width: 15px; height: 15px" />
-                <AppIcon v-else name="check" :size="16" />确认安装
+                <AppIcon v-else name="check" :size="16" />{{ importPreview?.update ? '确认更新' : '确认安装' }}
               </button>
             </template>
           </BaseDialog>

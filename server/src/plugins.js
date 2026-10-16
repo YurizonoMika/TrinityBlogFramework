@@ -34,6 +34,36 @@ mkdirSync(PLUGINS_DIR, { recursive: true })
 mkdirSync(USERS_DIR, { recursive: true })
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/
+
+/**
+ * Plugin SDK version advertised by the framework. Plugins may declare a minimum
+ * required SDK via `minSdkVersion` in plugin.json; installing/loading a plugin
+ * whose requirement is newer than this is refused.
+ */
+export const SDK_VERSION = '1.0.0'
+
+function parseSemver(v) {
+  return String(v || '')
+    .split(/[.+-]/)
+    .slice(0, 3)
+    .map((n) => parseInt(n, 10) || 0)
+}
+
+/** Compare two semver-ish strings → -1 | 0 | 1. */
+export function compareSemver(a, b) {
+  const x = parseSemver(a)
+  const y = parseSemver(b)
+  for (let i = 0; i < 3; i++) {
+    if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
+  }
+  return 0
+}
+
+/** Whether the framework SDK satisfies a plugin's minimum requirement. */
+export function sdkSatisfies(minSdkVersion) {
+  if (!minSdkVersion) return true
+  return compareSemver(SDK_VERSION, minSdkVersion) >= 0
+}
 const SCRIPT_TIMEOUT = 1500
 
 // in-memory runtime registry: `${userId}:${id}` -> { manifest, dir, registrations }
@@ -258,8 +288,10 @@ export function parsePluginPackage(buffer) {
 }
 
 /** Read a plugin package's metadata for a pre-install confirmation dialog. */
-export function inspectPlugin(buffer) {
+export function inspectPlugin(buffer, ownerId = null) {
   const { manifest, id } = parsePluginPackage(buffer)
+  const minSdkVersion = String(manifest.minSdkVersion || manifest.sdkVersion || '')
+  const existing = ownerId != null ? listPlugins(ownerId).find((p) => p.id === id) : null
   return {
     id,
     name: manifest.name,
@@ -267,11 +299,22 @@ export function inspectPlugin(buffer) {
     description: manifest.description || '',
     author: manifest.author || '',
     permissions: Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : [],
+    minSdkVersion,
+    sdkVersion: SDK_VERSION,
+    sdkOk: sdkSatisfies(minSdkVersion),
+    // installing a package whose id already exists is an update
+    update: Boolean(existing),
+    existingVersion: existing ? existing.version : null,
   }
 }
 
 export function importPlugin(userId, buffer) {
   const { zip, manifest, id, rootPrefix } = parsePluginPackage(buffer)
+
+  const minSdkVersion = String(manifest.minSdkVersion || manifest.sdkVersion || '')
+  if (!sdkSatisfies(minSdkVersion)) {
+    throw new Error(`该插件要求 SDK 版本 ≥ ${minSdkVersion}，当前站点 SDK 为 ${SDK_VERSION}，无法安装`)
+  }
 
   const dir = pluginDir(userId, id)
   rmSync(dir, { recursive: true, force: true })
@@ -525,6 +568,10 @@ function loadPlugin(userId, id) {
   const dir = pluginDir(userId, id)
   const manifest = readManifest(dir)
   if (!manifest) return markError(userId, id, 'plugin.json 缺失')
+  const minSdkVersion = String(manifest.minSdkVersion || manifest.sdkVersion || '')
+  if (!sdkSatisfies(minSdkVersion)) {
+    return markError(userId, id, `需要 SDK ≥ ${minSdkVersion}，当前站点 SDK 为 ${SDK_VERSION}`)
+  }
   const appPath = join(dir, 'app.js')
   if (!existsSync(appPath)) return markError(userId, id, 'app.js 缺失')
 

@@ -106,7 +106,15 @@ my-plugin/
 | `description` | string |  | 简介 |
 | `author` | string |  | 作者 |
 | `permissions` | string[] |  | 需要的敏感能力（见下），管理员逐项授予后才可用 |
+| `minSdkVersion` | string |  | 要求的最低框架 SDK 版本（semver）。站点 SDK 低于该值时**拒绝安装/加载** |
 | `capabilities` | object |  | 能力声明（信息性，供管理面板展示） |
+
+> **SDK 版本**：框架当前 SDK 版本为 `server/src/plugins.js` 导出的 `SDK_VERSION`（当前 `1.0.0`）。
+> 插件用 `minSdkVersion` 声明所需的最低版本；安装（`inspect`/`import`）与运行时加载都会校验，
+> 不满足时给出「需要 SDK ≥ x，当前 y」的提示并拒绝。
+
+> **更新**：导入与已安装插件**同 `id`** 的包即视为**更新**——安装确认弹窗会显示版本变化
+> （`v旧 → v新`）与「更新」标记，确认后覆盖其代码（存储与启停状态保留）。
 
 可用权限：
 
@@ -481,4 +489,6 @@ api.storage.{url, list, upload, replace, remove, removeBefore}
 > 本指南随插件系统一起以 **AGPL-3.0-or-later** 授权。示例插件见仓库 `examples/` 目录。
 >
 > 进阶参考：`examples/interactive-form`（互动表单）演示了 **编辑器工具浮窗**（`ui: true` + `api.editor`）、
-> **帖子模块传参**（`ctx.data`）、以及 **站点级共享存储**（`plugin.shared`）的完整用法。
+> **帖子模块传参**（`ctx.data`）、以及 **站点级共享存储**（`plugin.shared`）的完整用法；
+> `examples/web-embed`（内嵌网页）演示了**帖子内嵌 iframe**（需站点 CSP 允许 `frame-src`）与
+> 加载前征询访问者的模式。
