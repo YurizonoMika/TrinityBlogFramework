@@ -33,6 +33,7 @@ const CSP = [
   "font-src 'self' data:",
   "media-src 'self' blob: https:",
   "connect-src 'self'",
+  "frame-src https: http:",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
