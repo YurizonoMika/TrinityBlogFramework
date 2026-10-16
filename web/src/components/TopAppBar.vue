@@ -27,6 +27,7 @@ const searchRef = ref<HTMLElement | null>(null)
 const actionsRef = ref<HTMLElement | null>(null)
 const topbarCenterRef = ref<HTMLElement | null>(null)
 const collapsed = ref(false)
+const topbarWidth = ref(0) // cached natural width of plugin topbar components
 let resizeObserver: ResizeObserver | null = null
 
 const title = computed(() => site.site.title || '我的主页')
@@ -69,13 +70,16 @@ function measure() {
   if (!bar || !nav) return
   const need = nav.offsetWidth
   if (!need) return
+  // plugin topbar components are treated like nav items: they collapse together.
+  // measure their natural width only while actually laid out (cache when hidden)
+  const center = topbarCenterRef.value
+  if (center && center.offsetParent !== null) topbarWidth.value = center.offsetWidth
   const others =
     (brandRef.value?.offsetWidth || 0) +
     (searchRef.value?.offsetWidth || 0) +
     (actionsRef.value?.offsetWidth || 0) +
-    (topbarCenterRef.value?.offsetWidth || 0) +
     72
-  collapsed.value = bar.clientWidth - others < need
+  collapsed.value = bar.clientWidth - others < need + topbarWidth.value
 }
 
 function isActive(path: string) {
@@ -110,6 +114,9 @@ onMounted(() => {
   }
   window.addEventListener('resize', measure)
   nextTick(measure)
+  // plugin topbar components may mount asynchronously — re-measure shortly after
+  window.setTimeout(measure, 300)
+  window.setTimeout(measure, 1200)
 })
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick)
@@ -144,7 +151,7 @@ onUnmounted(() => {
         </a>
       </nav>
 
-      <div class="topbar-center">
+      <div v-if="!collapsed" class="topbar-center">
         <div ref="topbarCenterRef" class="topbar-center-inner">
           <PluginView
             v-for="t in topbarPlugins"
@@ -221,6 +228,16 @@ onUnmounted(() => {
         <router-link v-if="auth.user && can('post')" to="/write" @click="mobileOpen = false">
           <AppIcon name="edit" :size="18" />写文章
         </router-link>
+        <!-- plugin topbar components collapse into the menu too -->
+        <div v-if="topbarPlugins.length" class="mobile-topbars">
+          <PluginView
+            v-for="t in topbarPlugins"
+            :key="`m-${t.plugin.id}-${t.topbar.id}`"
+            :plugin="t.plugin"
+            kind="topbar"
+            :id="t.topbar.id"
+          />
+        </div>
       </div>
     </transition>
   </header>
@@ -403,6 +420,17 @@ onUnmounted(() => {
 }
 .mobile-nav a {
   width: 100%;
+}
+.mobile-topbars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--md-outline-variant);
+}
+.mobile-topbars :deep(*) {
+  max-width: 100%;
 }
 
 @media (max-width: 760px) {
