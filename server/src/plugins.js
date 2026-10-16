@@ -241,6 +241,7 @@ export function listPlugins(userId) {
       rev: meta.rev,
       enabled: state.enabled === undefined ? false : Boolean(state.enabled),
       visitor: Boolean(state.visitor),
+      locked: Boolean(state.locked),
       permissions: Array.isArray(state.permissions) ? state.permissions : [],
       token: (getUserSetting(userId, 'plugin_tokens', {}) || {})[id] || '',
       loaded: runtime.has(`${userId}:${id}`),
@@ -357,6 +358,7 @@ export function updatePluginState(userId, id, patch) {
   const next = { ...current }
   if (patch.enabled !== undefined) next.enabled = Boolean(patch.enabled)
   if (patch.visitor !== undefined) next.visitor = Boolean(patch.visitor)
+  if (patch.locked !== undefined) next.locked = Boolean(patch.locked)
   if (patch.permissions !== undefined && Array.isArray(patch.permissions)) {
     next.permissions = [...new Set(patch.permissions.map(String))]
   }

@@ -139,9 +139,13 @@ router.put('/:id', requireAuth, (req, res) => {
   const owner = manageOwner(req)
   if (!canManage(req, owner)) return res.status(403).json({ error: '没有权限' })
   const patch = req.body || {}
-  // running a plugin (server-side + in visitors' browsers) is an admin-only action
-  if ((patch.enabled !== undefined || patch.visitor !== undefined) && req.user.role !== 'admin') {
-    return res.status(403).json({ error: '仅管理员可以启用插件或对访客公开' })
+  // running a plugin (server-side + in visitors' browsers) and locking it are
+  // admin-only actions
+  if (
+    (patch.enabled !== undefined || patch.visitor !== undefined || patch.locked !== undefined) &&
+    req.user.role !== 'admin'
+  ) {
+    return res.status(403).json({ error: '仅管理员可以启用插件、对访客公开或锁定插件' })
   }
   // non-admins may only grant plugin permissions the admin allowed for them
   if (patch.permissions !== undefined && req.user.role !== 'admin') {
@@ -159,10 +163,14 @@ router.put('/:id', requireAuth, (req, res) => {
   }
 })
 
-// deleting a plugin is admin-only
-router.delete('/:id', requireAuth, requireAdmin, (req, res) => {
+router.delete('/:id', requireAuth, (req, res) => {
   const owner = manageOwner(req)
-  if (!owner) return res.status(400).json({ error: '没有权限' })
+  if (!canManage(req, owner)) return res.status(403).json({ error: '没有权限' })
+  // an admin-locked plugin can only be deleted by an admin
+  const locked = Boolean(getPluginStates(owner.id)[req.params.id]?.locked)
+  if (locked && req.user.role !== 'admin') {
+    return res.status(403).json({ error: '该插件已被管理员锁定，禁止删除' })
+  }
   try {
     deletePlugin(owner.id, req.params.id)
     res.json({ ok: true })
