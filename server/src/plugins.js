@@ -251,6 +251,7 @@ export function listPlugins(userId) {
       editorTools: reg?.editorTools || [],
       overlays: reg?.overlays || [],
       topbars: reg?.topbars || [],
+      footer: reg?.footer || [],
       cardSources: reg ? Object.keys(reg.cardSources).map((s) => ({ id: s })) : [],
     }
   })
@@ -424,6 +425,7 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
         id: String(def.id || 'settings'),
         title: def.title || manifest.name,
         icon: def.icon || 'settings',
+        adminOnly: def.adminOnly === true,
       })
     },
     registerWidget(def) {
@@ -434,6 +436,9 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
     },
     registerTopbar(def = {}) {
       registrations.topbars.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
+    },
+    registerFooter(def = {}) {
+      registrations.footer.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
     },
     registerPostModule(def) {
       registrations.postModules.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
@@ -575,7 +580,7 @@ function loadPlugin(userId, id) {
   const appPath = join(dir, 'app.js')
   if (!existsSync(appPath)) return markError(userId, id, 'app.js 缺失')
 
-  const registrations = { routes: {}, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], postModules: [], editorTools: [], settings: [] }
+  const registrations = { routes: {}, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], footer: [], postModules: [], editorTools: [], settings: [] }
   try {
     const sandbox = buildSandbox(userId, id, manifest, dir, registrations)
     const context = vm.createContext(sandbox)
@@ -706,6 +711,7 @@ export function getRuntimeManifest(canSeePrivate, userId) {
       widgets: registrations.widgets,
       overlays: registrations.overlays,
       topbars: registrations.topbars,
+      footer: registrations.footer,
       postModules: registrations.postModules,
       editorTools: registrations.editorTools,
       cardSources: Object.keys(registrations.cardSources).map((s) => ({ id: s })),

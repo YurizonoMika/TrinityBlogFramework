@@ -90,6 +90,7 @@ export interface RuntimePlugin {
   widgets: PluginPage[]
   overlays: PluginOverlay[]
   topbars: PluginTopbar[]
+  footer: PluginPage[]
   postModules: PluginPage[]
   editorTools: PluginEditorTool[]
   settings: PluginSettingsPanel[]
@@ -100,6 +101,7 @@ export interface PluginSettingsPanel {
   id: string
   title: string
   icon?: string
+  adminOnly?: boolean
 }
 
 export interface InstalledPlugin {

@@ -164,7 +164,11 @@ const ALL_TABS = [
 const canManagePlugins = computed(() => isAdminUser.value || Boolean(auth.user?.permissions?.plugins))
 // settings panels contributed by enabled plugins (available to the current user)
 const pluginSettings = computed(() =>
-  plugins.list.flatMap((p) => (p.settings || []).map((s) => ({ plugin: p, setting: s })))
+  plugins.list.flatMap((p) =>
+    (p.settings || [])
+      .filter((s) => !s.adminOnly || isAdminUser.value)
+      .map((s) => ({ plugin: p, setting: s }))
+  )
 )
 const TABS = computed(() => [
   ...ALL_TABS.filter((t) => {
@@ -1662,7 +1666,7 @@ const PERMISSION_LABELS: Record<string, string> = {
                 <AppIcon name="settings" :size="16" />管理
               </button>
               <button
-                v-if="isAdminUser || !pluginOwner"
+                v-if="isAdminUser"
                 class="btn btn-outlined btn-sm"
                 @click="removePlugin(p)"
               >

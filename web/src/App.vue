@@ -9,15 +9,19 @@ import ToastHost from './components/ToastHost.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import CreditsDialog from './components/CreditsDialog.vue'
 import PluginOverlay from './components/PluginOverlay.vue'
+import PluginView from './components/PluginView.vue'
 import DialogHost from './components/DialogHost.vue'
 import AppIcon from './components/AppIcon.vue'
 import { auth, can } from '@/stores/auth'
 import { loadPublicSite, applyTheme, site } from '@/stores/site'
-import { loadPlugins } from '@/lib/plugins'
+import { loadPlugins, plugins } from '@/lib/plugins'
 import { usePageOwner } from '@/lib/scope'
 
 const route = useRoute()
 const creditsOpen = ref(false)
+const footerPlugins = computed(() =>
+  plugins.list.flatMap((p) => (p.footer || []).map((f) => ({ plugin: p, footer: f })))
+)
 const showChrome = computed(() => route.name !== 'setup' && route.name !== 'login')
 const showFab = computed(
   () => auth.user && can('post') && (route.name === 'home' || route.name === 'blog' || route.name === 'user-home')
@@ -64,13 +68,24 @@ watch(
     </main>
 
     <footer v-if="showChrome" class="app-footer">
-      <div class="md-container">
-        <span class="md-muted">
-          {{ site.site.footer || `© ${new Date().getFullYear()} ${site.site.title || '我的主页'}` }}
-        </span>
-        <button class="powered credits-trigger" title="查看版权与开源许可" @click="creditsOpen = true">
-          Trinity Blog Framework
-        </button>
+      <div class="md-container footer-inner">
+        <div class="footer-bar">
+          <span class="md-muted">
+            {{ site.site.footer || `© ${new Date().getFullYear()} ${site.site.title || '我的主页'}` }}
+          </span>
+          <button class="powered credits-trigger" title="查看版权与开源许可" @click="creditsOpen = true">
+            Trinity Blog Framework
+          </button>
+        </div>
+        <div v-if="footerPlugins.length" class="footer-plugins">
+          <PluginView
+            v-for="f in footerPlugins"
+            :key="`${f.plugin.id}-${f.footer.id}`"
+            :plugin="f.plugin"
+            kind="footer"
+            :id="f.footer.id"
+          />
+        </div>
       </div>
     </footer>
 
@@ -103,12 +118,26 @@ watch(
   padding: 32px 0 40px;
   border-top: 1px solid color-mix(in srgb, var(--md-outline-variant) 60%, transparent);
 }
-.app-footer .md-container {
+.app-footer .footer-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 0.82rem;
+}
+.footer-bar {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  font-size: 0.82rem;
+}
+.footer-plugins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+}
+.footer-plugins > * {
+  max-width: 100%;
 }
 .powered {
   opacity: 0.8;

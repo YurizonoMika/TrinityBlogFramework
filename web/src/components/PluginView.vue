@@ -13,7 +13,7 @@ const props = defineProps<{
   source?: string
   title?: string
   data?: unknown
-  kind?: 'widget' | 'page' | 'module' | 'overlay' | 'topbar' | 'editor-tool' | 'settings'
+  kind?: 'widget' | 'page' | 'module' | 'overlay' | 'topbar' | 'footer' | 'editor-tool' | 'settings'
   id?: string
   /** when to mount the plugin: immediately, when scrolled near, or when idle */
   mount?: 'eager' | 'visible' | 'idle'

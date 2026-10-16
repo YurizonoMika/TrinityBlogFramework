@@ -159,9 +159,10 @@ router.put('/:id', requireAuth, (req, res) => {
   }
 })
 
-router.delete('/:id', requireAuth, (req, res) => {
+// deleting a plugin is admin-only
+router.delete('/:id', requireAuth, requireAdmin, (req, res) => {
   const owner = manageOwner(req)
-  if (!canManage(req, owner)) return res.status(403).json({ error: '没有权限' })
+  if (!owner) return res.status(400).json({ error: '没有权限' })
   try {
     deletePlugin(owner.id, req.params.id)
     res.json({ ok: true })

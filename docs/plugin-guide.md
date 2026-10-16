@@ -141,9 +141,10 @@ plugin.registerRoute(name, handler)          // 自定义接口 → 前端 api.c
 plugin.registerCardSource(id, handler)       // 数据源 → 前端 api.data(id)
 plugin.registerWidget({ id, title })         // 首页小组件
 plugin.registerPage({ id, title, icon })     // 独立页面 /p/<pluginId>/<id>
-plugin.registerSettings({ id, title, icon }) // 在「用户设置」侧栏添加一个设置项（kind='settings'）
+plugin.registerSettings({ id, title, icon, adminOnly }) // 设置项（adminOnly 时仅管理员可见）
 plugin.registerOverlay({ id, pages })        // 页面叠加层，pages: ['home','blog',...] 或 ['*']
 plugin.registerTopbar({ id, title })         // 顶栏中央插槽
+plugin.registerFooter({ id, title })         // 页脚版权栏下方插槽
 plugin.registerPostModule({ id, title })     // 帖子内嵌模块
 plugin.registerEditorTool({ id, label, icon, ui })// 编辑器工具栏按钮（ui:true 时点击弹出插件浮窗）
 ```
@@ -245,8 +246,8 @@ export function mount(ctx) {
 | 字段 | 说明 |
 |---|---|
 | `pluginId` | 插件 id |
-| `kind` | `widget` / `page` / `module` / `overlay` / `topbar` / `editor-tool` / `settings` |
-| `id` | 当前小组件 / 页面 / 模块 / 叠加层 / 顶栏 / 编辑器工具 / 设置项的 id |
+| `kind` | `widget` / `page` / `module` / `overlay` / `topbar` / `footer` / `editor-tool` / `settings` |
+| `id` | 当前小组件 / 页面 / 模块 / 叠加层 / 顶栏 / 页脚 / 编辑器工具 / 设置项的 id |
 | `root` | shadow root（用 `root.querySelector`） |
 | `host` | 外层宿主元素 |
 | `owner` | 该页面所属用户名（用于跨用户场景） |
@@ -280,9 +281,10 @@ api.storage.remove(name) / removeBefore(date)
 | **小组件** | `registerWidget` | 首页「添加卡片」选择插件小组件，或在 拓展程序 →「提供的内容 → 小组件」点击「+」加入首页 |
 | **数据源** | `registerCardSource` | 首页添加「插件数据源」卡片后选择；`ui.ux` 可用 `{{ }}` 插值 |
 | **独立页面** | `registerPage` | 顶栏「页面」入口 / 直接访问 `/p/<pluginId>/<pageId>` |
-| **设置项** | `registerSettings` | 在「用户设置」左侧导航新增一项，内容以 `kind='settings'` 渲染；随插件启用对当前用户可见 |
+| **设置项** | `registerSettings` | 在「用户设置」左侧导航新增一项，内容以 `kind='settings'` 渲染；随插件启用对当前用户可见（`adminOnly: true` 时仅管理员可见，且服务端应校验 `req.isAdmin`） |
 | **叠加层** | `registerOverlay` | 在匹配的页面覆盖渲染；`pages` 用路由名（`home`/`blog`/`post`/`moments`/`settings`/`user-home`/`write`/`edit`/`plugin-page`）或 `*` |
 | **顶栏** | `registerTopbar` | 渲染在顶栏中央插槽 |
+| **页脚** | `registerFooter` | 渲染在底部版权栏下方（`kind='footer'`） |
 | **帖子模块** | `registerPostModule` | 在帖子内容中写 `[[plugin:<pluginId>/<moduleId>]]`，可带参数：`[[plugin:<id>/<mod>\|{"foo":1}]]` |
 | **编辑器工具** | `registerEditorTool` | 编辑器工具栏按钮。默认插入模块标记；声明 `ui: true` 时点击弹出插件浮窗（`kind='editor-tool'`），可用 `api.editor.insert()` 插入内容后 `close()` |
 | **接口** | `registerRoute` | 前端 `api.call(name)`；HTTP：`/api/plugins/<id>/call/<name>` |
