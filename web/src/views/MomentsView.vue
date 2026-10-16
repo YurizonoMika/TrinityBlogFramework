@@ -10,6 +10,7 @@ import ImageLightbox from '@/components/ImageLightbox.vue'
 import { api, uploadFile } from '@/lib/api'
 import { formatRelative } from '@/lib/format'
 import { auth, can } from '@/stores/auth'
+import { site } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import type { Moment } from '@/lib/types'
 
@@ -20,9 +21,9 @@ const route = useRoute()
 const routeUsername = computed(() => (route.query.username as string) || '')
 const moments = ref<Moment[]>([])
 const loading = ref(true)
-const canCompose = computed(
-  () => can('moment') && (!routeUsername.value || auth.user?.username === routeUsername.value)
-)
+// the page's owner (site owner when unscoped) — only they (or an admin) may post here
+const ownerUsername = computed(() => routeUsername.value || site.profile?.username || '')
+const canCompose = computed(() => can('moment') && auth.user?.username === ownerUsername.value)
 
 const composer = reactive({
   open: false,

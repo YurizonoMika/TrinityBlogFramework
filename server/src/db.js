@@ -183,7 +183,7 @@ export function migrateLegacyUserData() {
       }
       if (changed) save('integrations', merged)
     }
-    for (const key of ['links', 'tags', 'nintendo_auth']) {
+    for (const key of ['links', 'tags', 'categories', 'nintendo_auth']) {
       if (currentRow(key)) continue
       const value = legacyGet(key)
       if (value != null) save(key, value)

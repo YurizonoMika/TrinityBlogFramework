@@ -60,7 +60,7 @@ function buildPublic(profileUser) {
     site: getSetting('site', {}),
     profile: publicProfileFor(profileUser),
     homepage: profileUser ? userHomepage(profileUser.id) : { banner: '', subtitle: '', description: '' },
-    categories: getSetting('categories', []),
+    categories: profileUser ? getUserSetting(profileUser.id, 'categories', []) : [],
     integrations: {
       github: { username: integrations.github?.username || '' },
       steam: { steamId: integrations.steam?.steamId || '' },
@@ -83,7 +83,7 @@ router.get('/public', (req, res) => {
       site: getSetting('site', {}),
       profile: null,
       homepage: { banner: '', subtitle: '', description: '' },
-      categories: getSetting('categories', []),
+      categories: [],
       integrations: {},
     })
   }
@@ -97,7 +97,7 @@ router.get('/', requireAuth, (req, res) => {
     integrations: userIntegrations(target.id),
     links: getUserSetting(target.id, 'links', []),
     tags: getUserSetting(target.id, 'tags', []),
-    categories: getSetting('categories', []),
+    categories: getUserSetting(target.id, 'categories', []),
     profile: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(target.id)),
     homepage: userHomepage(target.id),
     isAdmin: req.user.role === 'admin',
@@ -181,10 +181,12 @@ router.put('/tags', requireAuth, (req, res) => {
   res.json({ tags: setUserSetting(target.id, 'tags', tags) })
 })
 
-router.put('/categories', requireAuth, requireAdmin, (req, res) => {
+// per-user blog categories (each user manages their own)
+router.put('/categories', requireAuth, (req, res) => {
+  const target = targetUser(req)
   const raw = Array.isArray(req.body?.categories) ? req.body.categories : []
   const categories = [...new Set(raw.map((c) => String(c).trim()).filter(Boolean))]
-  res.json({ categories: setSetting('categories', categories) })
+  res.json({ categories: setUserSetting(target.id, 'categories', categories) })
 })
 
 router.put('/profile', requireAuth, (req, res) => {

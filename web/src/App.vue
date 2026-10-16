@@ -33,7 +33,7 @@ onMounted(async () => {
   applyTheme()
   loadPlugins(scopeOwner.value)
   try {
-    await loadPublicSite()
+    await loadPublicSite(scopeOwner.value)
   } catch {
     /* server not reachable yet */
   }
@@ -42,12 +42,15 @@ onMounted(async () => {
 watch(
   () => auth.user,
   () => {
-    loadPublicSite().catch(() => {})
+    loadPublicSite(scopeOwner.value).catch(() => {})
     loadPlugins(scopeOwner.value)
   }
 )
 
-watch(scopeOwner, (u) => loadPlugins(u))
+watch(scopeOwner, (u) => {
+  loadPlugins(u)
+  loadPublicSite(u).catch(() => {})
+})
 
 watch(
   () => site.site.accent,

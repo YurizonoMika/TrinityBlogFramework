@@ -107,14 +107,15 @@ export function toggleTheme() {
   applyTheme()
 }
 
-export async function loadPublicSite() {
+export async function loadPublicSite(username = '') {
+  const qs = username ? `?username=${encodeURIComponent(username)}` : ''
   const data = await api<{
     site: SiteSettings
     profile: PublicProfile
     homepage: HomepageSettings
     categories: string[]
     integrations: Integrations
-  }>('/settings/public', { auth: false })
+  }>(`/settings/public${qs}`, { auth: false })
   site.site = data.site || {}
   site.profile = data.profile
   site.homepage = data.homepage || {}

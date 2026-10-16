@@ -2,7 +2,7 @@
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
 import { Router } from 'express'
-import { db } from '../db.js'
+import { db, primaryUserId } from '../db.js'
 import { requireAuth, can, sessionUser } from '../auth.js'
 import { pageUsername } from '../scope.js'
 
@@ -89,6 +89,9 @@ router.get('/', (req, res) => {
   } else if (authorId) {
     author = authorId
   }
+  // with no explicit user, the public blog shows the SITE OWNER's posts only
+  // (admins listing everything must pass `?all=1` with no username)
+  if (author == null && !seeAll) author = primaryUserId()
   if (author != null) {
     where.push('p.author_id = ?')
     params.push(author)

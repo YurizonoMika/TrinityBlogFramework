@@ -2,7 +2,7 @@
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
 import { Router } from 'express'
-import { db } from '../db.js'
+import { db, primaryUserId } from '../db.js'
 import { requireAuth, can } from '../auth.js'
 import { pageUsername } from '../scope.js'
 
@@ -44,16 +44,11 @@ router.get('/', (req, res) => {
   } else if (authorId) {
     author = authorId
   }
-  const rows =
-    author != null
-      ? db
-          .prepare(
-            'SELECT * FROM moments WHERE author_id = ? ORDER BY datetime(created_at) DESC, id DESC LIMIT ?'
-          )
-          .all(author, limit)
-      : db
-          .prepare('SELECT * FROM moments ORDER BY datetime(created_at) DESC, id DESC LIMIT ?')
-          .all(limit)
+  // with no explicit user, the public moments page shows the SITE OWNER's only
+  if (author == null) author = primaryUserId()
+  const rows = db
+    .prepare('SELECT * FROM moments WHERE author_id = ? ORDER BY datetime(created_at) DESC, id DESC LIMIT ?')
+    .all(author, limit)
   res.json({ moments: rows.map(parseMoment) })
 })
 
