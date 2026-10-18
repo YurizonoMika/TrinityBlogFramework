@@ -11,6 +11,7 @@ import { api } from '@/lib/api'
 import { renderMarkdown } from '@/lib/markdown'
 import { formatDate, readingTime } from '@/lib/format'
 import { auth } from '@/stores/auth'
+import { setPageTitle } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import { useParallax } from '@/lib/useParallax'
 import type { Post } from '@/lib/types'
@@ -66,10 +67,12 @@ async function load() {
   try {
     const res = await api<{ post: Post }>(`/posts/${route.params.slug}`)
     post.value = res.post
+    setPageTitle(post.value.title)
     await nextTick()
     updateParallax()
   } catch (e: any) {
     notFound.value = true
+    setPageTitle('未找到')
   } finally {
     loading.value = false
   }

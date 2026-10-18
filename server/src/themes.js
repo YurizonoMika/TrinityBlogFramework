@@ -73,13 +73,30 @@ function themeOptions(meta) {
   const list = Array.isArray(meta?.options) ? meta.options : []
   return list
     .filter((o) => o && typeof o.id === 'string' && /^[a-z0-9-]+$/i.test(o.id))
-    .map((o) => ({
-      id: String(o.id),
-      label: String(o.label || o.id).slice(0, 60),
-      type: ['color', 'text', 'select', 'boolean', 'image'].includes(o.type) ? o.type : 'text',
-      default: o.default ?? (o.type === 'boolean' ? false : ''),
-      options: Array.isArray(o.options) ? o.options.map((v) => String(v)) : undefined,
-    }))
+    .map((o) => {
+      // `whenSet` — extra CSS variables applied only while the option has a
+      // value (e.g. an image option that turns on a readability text-shadow).
+      let whenSet
+      if (o.whenSet && typeof o.whenSet === 'object') {
+        whenSet = {}
+        for (const [k, v] of Object.entries(o.whenSet)) {
+          if (/^--[a-z0-9-]+$/i.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+            whenSet[k] = String(v).slice(0, 200)
+          }
+        }
+        if (!Object.keys(whenSet).length) whenSet = undefined
+      }
+      return {
+        id: String(o.id),
+        label: String(o.label || o.id).slice(0, 60),
+        type: ['color', 'text', 'select', 'boolean', 'image'].includes(o.type) ? o.type : 'text',
+        default: o.default ?? (o.type === 'boolean' ? false : ''),
+        options: Array.isArray(o.options) ? o.options.map((v) => String(v)) : undefined,
+        whenSet,
+        // image options can ask the app to auto-pick a contrasting text colour
+        contrast: o.contrast === true,
+      }
+    })
 }
 
 /** Color schemes embedded by a theme — can override the site's default palettes. */

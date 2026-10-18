@@ -10,7 +10,7 @@ import ImageLightbox from '@/components/ImageLightbox.vue'
 import { api, uploadFile } from '@/lib/api'
 import { formatRelative } from '@/lib/format'
 import { auth, can } from '@/stores/auth'
-import { site } from '@/stores/site'
+import { setPageTitle, site } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import type { Moment } from '@/lib/types'
 
@@ -41,6 +41,7 @@ const remaining = computed(() => MAX_LEN - composer.content.length)
 
 async function load() {
   loading.value = true
+  setPageTitle('动态')
   try {
     const scope = routeUsername.value ? `&username=${encodeURIComponent(routeUsername.value)}` : ''
     const res = await api<{ moments: Moment[] }>(`/moments?limit=200${scope}`, { auth: false })

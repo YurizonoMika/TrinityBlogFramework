@@ -306,13 +306,34 @@ export function importPlugin(userId, buffer) {
     writeFileSync(target, item.getData())
   }
 
+  // Installing is the owner's approval step: grant the permissions the plugin
+  // requested, limited to what the installer is allowed to grant (admins may
+  // grant anything; other users only the permissions an admin pre-approved for
+  // them via `plugin_permissions`). The owner can still revoke any of these in
+  // the plugin manager afterwards.
+  const requested = Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : []
+  const granted = grantablePermissions(userId, requested)
   const states = getPluginStates(userId)
-  if (!states[id]) {
-    states[id] = { enabled: false, visitor: false, permissions: [] }
+  const prev = states[id]
+  if (!prev) {
+    states[id] = { enabled: false, visitor: false, permissions: granted, permissionsApproved: true }
+    setPluginStates(userId, states)
+  } else {
+    const set = new Set(prev.permissions || [])
+    for (const p of granted) set.add(p)
+    states[id] = { ...prev, permissions: [...set], permissionsApproved: true }
     setPluginStates(userId, states)
   }
   if (getPluginStates(userId)[id]?.enabled) loadPlugin(userId, id)
   return listPlugins(userId).find((p) => p.id === id)
+}
+
+/** The subset of `requested` permissions `userId` is permitted to grant. */
+function grantablePermissions(userId, requested) {
+  const role = db.prepare('SELECT role FROM users WHERE id = ?').get(userId)?.role
+  if (role === 'admin' || role === 'super') return [...requested]
+  const allowed = new Set(getUserSetting(userId, 'plugin_permissions', []) || [])
+  return requested.filter((p) => allowed.has(p))
 }
 
 export function deletePlugin(userId, id) {
@@ -334,6 +355,9 @@ export function updatePluginState(userId, id, patch) {
   if (patch.locked !== undefined) next.locked = Boolean(patch.locked)
   if (patch.permissions !== undefined && Array.isArray(patch.permissions)) {
     next.permissions = [...new Set(patch.permissions.map(String))]
+    // an explicit edit means the admin has reviewed the permissions — never
+    // auto-grant (or re-grant) after this
+    next.permissionsApproved = true
   }
   states[id] = next
   setPluginStates(userId, states)
@@ -611,6 +635,38 @@ function migrateLegacyPlugins() {
   }
 }
 
+/**
+ * One-time: plugins installed before "install grants requested permissions"
+ * existed have `permissions: []` even though their manifest requested some, so
+ * their storage / fetch APIs never existed. Grant the requested permissions
+ * now, exactly as a fresh install would. Once a state carries the
+ * `permissionsApproved` marker (set on install, explicit permission edits, or
+ * this backfill) it is never touched again — so revocations stick.
+ */
+function backfillPluginPermissions() {
+  for (const u of db.prepare('SELECT id FROM users').all()) {
+    const states = getPluginStates(u.id)
+    let changed = false
+    for (const [id, state] of Object.entries(states)) {
+      if (!state || state.permissionsApproved) continue
+      const dir = pluginDir(u.id, id)
+      if (!existsSync(join(dir, 'plugin.json'))) {
+        // plugin code is gone — mark so we don't keep re-checking it
+        states[id] = { ...state, permissionsApproved: true }
+        changed = true
+        continue
+      }
+      const manifest = readManifest(dir) || {}
+      const requested = Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : []
+      const set = new Set(state.permissions || [])
+      for (const p of grantablePermissions(u.id, requested)) set.add(p)
+      states[id] = { ...state, permissions: [...set], permissionsApproved: true }
+      changed = true
+    }
+    if (changed) setPluginStates(u.id, states)
+  }
+}
+
 /** One-time: move pre-multi-user plugin STORAGE into the admin's per-user storage. */
 function migrateLegacyPluginStorage() {
   const admin = primaryUserId()
@@ -641,6 +697,7 @@ function migrateLegacyPluginStorage() {
 export function loadAllPlugins() {
   migrateLegacyPlugins()
   migrateLegacyPluginStorage()
+  backfillPluginPermissions()
   for (const u of db.prepare('SELECT id FROM users').all()) {
     const states = getPluginStates(u.id)
     for (const [id, state] of Object.entries(states)) {

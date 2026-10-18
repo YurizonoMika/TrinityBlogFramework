@@ -10,6 +10,10 @@ export interface ThemeOptionDef {
   type: 'color' | 'text' | 'select' | 'boolean' | 'image'
   default: unknown
   options?: string[]
+  /** extra CSS variables applied only while this option has a value */
+  whenSet?: Record<string, string>
+  /** image options: measure the image and expose an auto-contrast text colour */
+  contrast?: boolean
 }
 
 /** A color scheme embedded by a theme; it can override the default palettes. */
@@ -61,6 +65,13 @@ const VAR_PREFIX = '--opt-'
 
 /** CSS custom properties set by the active color scheme (to clean up on switch). */
 let schemeVars: string[] = []
+/** Conditional option vars (`whenSet`) currently applied (to clean up). */
+let conditionalVars: string[] = []
+
+function isSet(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  return value !== '' && value !== null && value !== undefined
+}
 
 function applyThemeStyles() {
   let link = document.getElementById(LINK_ID) as HTMLLinkElement | null
@@ -80,19 +91,28 @@ function applyThemeStyles() {
 /** Expose the theme's option values as CSS variables (inherit into shadow DOM). */
 function applyOptionVars() {
   const root = document.documentElement
-  const types = new Map(theme.options.map((o) => [o.id, o.type]))
+  const defs = new Map(theme.options.map((o) => [o.id, o]))
   // clear previously-applied option vars
   for (const name of Array.from(root.style)) {
     if (name.startsWith('--opt-')) root.style.removeProperty(name)
   }
+  for (const name of conditionalVars) root.style.removeProperty(name)
+  conditionalVars = []
   for (const [id, value] of Object.entries(theme.values)) {
-    const type = types.get(id)
-    if (!type) continue
+    const def = defs.get(id)
+    if (!def) continue
     let v: string
-    if (type === 'boolean') v = value ? '1' : '0'
-    else if (type === 'image') v = value ? `url("${String(value).replace(/["\\]/g, '')}")` : 'none'
+    if (def.type === 'boolean') v = value ? '1' : '0'
+    else if (def.type === 'image') v = value ? `url("${String(value).replace(/["\\]/g, '')}")` : 'none'
     else v = String(value ?? '')
     root.style.setProperty(`${VAR_PREFIX}${id}`, v)
+    if (def.whenSet && isSet(value)) {
+      for (const [name, val] of Object.entries(def.whenSet)) {
+        if (!name.startsWith('--')) continue
+        root.style.setProperty(name, val)
+        conditionalVars.push(name)
+      }
+    }
   }
 }
 
@@ -107,6 +127,73 @@ function applySchemeVars() {
     if (!name.startsWith('--')) continue
     root.style.setProperty(name, value)
     schemeVars.push(name)
+  }
+}
+
+/* ---- auto-contrast text over an imported background image ---- */
+let contrastVars: string[] = []
+let contrastToken = 0
+const measuredLuma = new Map<string, { url: string; luma: number | null }>()
+
+/** Average relative luminance (0..1) of an image, or null if unreadable. */
+function imageLuminance(url: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    if (/^https?:/i.test(url) && !url.startsWith(location.origin)) img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      try {
+        const size = 32
+        const canvas = document.createElement('canvas')
+        canvas.width = canvas.height = size
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return resolve(null)
+        ctx.drawImage(img, 0, 0, size, size)
+        const { data } = ctx.getImageData(0, 0, size, size)
+        let sum = 0
+        for (let i = 0; i < data.length; i += 4) {
+          sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]
+        }
+        resolve(sum / (data.length / 4) / 255)
+      } catch {
+        resolve(null) // tainted canvas (cross-origin image)
+      }
+    }
+    img.onerror = () => resolve(null)
+    img.src = url
+  })
+}
+
+function clearContrastVars() {
+  const root = document.documentElement
+  for (const name of contrastVars) root.style.removeProperty(name)
+  contrastVars = []
+}
+
+/** For each image option flagged `contrast`, expose a readable text colour. */
+async function applyImageContrast() {
+  const token = ++contrastToken
+  clearContrastVars()
+  const defs = theme.options.filter((o) => o.type === 'image' && o.contrast)
+  if (!defs.length) return
+  const root = document.documentElement
+  for (const def of defs) {
+    const url = theme.values[def.id]
+    if (typeof url !== 'string' || !url) continue
+    let entry = measuredLuma.get(def.id)
+    if (!entry || entry.url !== url) {
+      entry = { url, luma: await imageLuminance(url) }
+      measuredLuma.set(def.id, entry)
+    }
+    if (token !== contrastToken || entry.luma === null) continue
+    const on = entry.luma < 0.5 ? '#ffffff' : '#141414'
+    const vars: Record<string, string> = {
+      [`${VAR_PREFIX}${def.id}-luma`]: entry.luma.toFixed(3),
+      [`${VAR_PREFIX}${def.id}-on`]: on,
+    }
+    for (const [name, value] of Object.entries(vars)) {
+      root.style.setProperty(name, value)
+      contrastVars.push(name)
+    }
   }
 }
 
@@ -149,6 +236,7 @@ export function setTheme(t: Partial<ThemeState> | null) {
   applyThemeStyles()
   applyOptionVars()
   applySchemeVars()
+  applyImageContrast()
   applyThemeDom()
 }
 
@@ -168,6 +256,7 @@ export function setThemeValues(values: Record<string, unknown>) {
   theme.values = { ...theme.values, ...values }
   applyOptionVars()
   applySchemeVars()
+  applyImageContrast()
 }
 
 /** Load the theme applied by a page owner ('' = site owner). */

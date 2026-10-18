@@ -105,7 +105,7 @@ my-plugin/
 | `version` | string |  | 语义化版本，建议每次改动都递增 |
 | `description` | string |  | 简介 |
 | `author` | string |  | 作者 |
-| `permissions` | string[] |  | 需要的敏感能力（见下），管理员逐项授予后才可用 |
+| `permissions` | string[] |  | 需要的敏感能力（见下）。安装时自动授予（受安装者权限范围限制，可在管理面板撤销） |
 | `minSdkVersion` | string |  | 要求的最低框架 SDK 版本（semver）。站点 SDK 低于该值时**拒绝安装/加载** |
 | `capabilities` | object |  | 能力声明（信息性，供管理面板展示） |
 
@@ -340,8 +340,13 @@ if (plugin.hasPermission('storage')) {
    - 未开启「对访客开放」的插件**只在插件所属用户本人的会话中渲染**。
    - 管理员或其它访客访问 `/user/某用户` 时，只会加载该用户**已公开**的插件。
    - 未公开插件的资源 / 数据 / 接口仅本人或管理员可访问。
-3. **敏感能力逐项授权。** `storage` / `net:fetch` / `token` / `posts:read` / `moments:read` /
-   `settings:read` 需管理员授予后，对应 API 才会注入到沙箱。
+3. **敏感能力在安装时授予（可撤销）。** `storage` / `net:fetch` / `token` / `posts:read` /
+   `moments:read` / `settings:read` 对应 API 只有在插件被授予该权限后才会注入沙箱。
+   - `plugin.json` 的 `permissions` 是**申请**的权限；**安装即视为批准**：安装时自动把这些权限授予该插件，
+     因此插件开箱即用（例如音乐播放器安装后即可读写 `storage`）。
+   - 授予范围受安装者身份限制：**管理员**可授予其申请的全部权限；**普通用户**只能授予管理员通过
+     `plugin_permissions` 预先批准的权限子集。
+   - 管理员仍可在插件管理浮窗中**逐项取消**授权，取消后对应 API 立即从沙箱移除。
 4. **CSP。** 站点启用严格 CSP：`script-src 'self'`、`connect-src 'self'`。插件前端不得直连第三方，
    一律走服务端 `plugin.fetch`。
 5. **模板清洗。** `ui.ux` 在服务端与客户端都会被清洗（移除脚本 / 事件属性 / `javascript:`）。

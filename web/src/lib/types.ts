@@ -162,6 +162,8 @@ export interface ThemeOption {
   type: 'color' | 'text' | 'select' | 'boolean' | 'image'
   default: unknown
   options?: string[]
+  whenSet?: Record<string, string>
+  contrast?: boolean
 }
 
 export interface ThemeScheme {

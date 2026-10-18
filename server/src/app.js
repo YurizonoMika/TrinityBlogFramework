@@ -4,9 +4,9 @@
 import express from 'express'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
-import { UPLOAD_DIR } from './db.js'
+import { UPLOAD_DIR, getSetting } from './db.js'
 import setupRoutes from './routes/setup.js'
 import authRoutes from './routes/auth.js'
 import userRoutes from './routes/users.js'
@@ -95,10 +95,69 @@ export function createApp() {
 
   const distDir = join(__dirname, '..', '..', 'web', 'dist')
   if (existsSync(distDir)) {
-    app.use(express.static(distDir))
+    // Transparent icon used when the owner hasn't uploaded a logo.
+    const BLANK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"/>'
+    const BLANK_ICON = `data:image/svg+xml,${encodeURIComponent(BLANK_SVG)}`
+    // The site owner's icon setting (global), e.g. /uploads/users/1/xxxx.png
+    const siteIcon = () => String(getSetting('site', {}).icon || '')
+    // Resolve the icon setting to an on-disk file (path-traversal guarded).
+    const iconFile = () => {
+      const icon = siteIcon()
+      if (!icon || !icon.startsWith('/uploads/')) return null
+      const rel = icon.slice('/uploads/'.length)
+      if (!rel || rel.includes('..')) return null
+      const p = join(UPLOAD_DIR, rel)
+      return existsSync(p) ? p : null
+    }
+    const iconType = (href) =>
+      href.includes('.png') ? 'image/png'
+      : href.includes('.jpg') || href.includes('.jpeg') ? 'image/jpeg'
+      : href.includes('.webp') ? 'image/webp'
+      : href.includes('.gif') ? 'image/gif'
+      : 'image/svg+xml'
+
+    // Serve the current icon at the classic favicon paths. Old cached HTML and
+    // browsers' automatic /favicon.ico requests point here, so this guarantees
+    // the right icon even if a browser still holds the previous page shell.
+    // Registered BEFORE the static middleware so it wins over the placeholder.
+    app.get(['/favicon.ico', '/favicon.svg', '/favicon.png', '/apple-touch-icon.png', '/apple-touch-icon-precomposed.png'], (req, res) => {
+      res.set('Cache-Control', 'no-cache')
+      const file = iconFile()
+      if (file) return res.sendFile(file)
+      res.type('image/svg+xml').send(BLANK_SVG)
+    })
+
+    // Read the shell once; the favicon link is injected per request so the
+    // browser gets the right icon at parse time (history/bookmarks capture the
+    // favicon on load, and Safari ignores late JS-set icons).
+    let indexTemplate = ''
+    try {
+      indexTemplate = readFileSync(join(distDir, 'index.html'), 'utf8')
+    } catch {
+      indexTemplate = ''
+    }
+    const renderIndex = () => {
+      const icon = siteIcon()
+      const href = icon || BLANK_ICON
+      const type = icon ? iconType(icon) : 'image/svg+xml'
+      const links =
+        `<link rel="icon" href="${href}" type="${type}" />\n` +
+        `    <link rel="apple-touch-icon" href="${href}" />`
+      return indexTemplate.replace(/<link rel="icon"[^>]*>/, links)
+    }
+    const sendIndex = (res) => {
+      if (!indexTemplate) return res.sendFile(join(distDir, 'index.html'))
+      res.set('Cache-Control', 'no-cache')
+      res.type('html').send(renderIndex())
+    }
+    // `/` and `/index.html` go through the injector (registered before the
+    // static middleware so they take precedence)
+    app.get(['/', '/index.html'], (req, res) => sendIndex(res))
+    // serve assets (hashed js/css, images) but never the raw index.html
+    app.use(express.static(distDir, { index: false }))
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next()
-      res.sendFile(join(distDir, 'index.html'))
+      sendIndex(res)
     })
   }
 

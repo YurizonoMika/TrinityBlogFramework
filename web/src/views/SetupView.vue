@@ -6,11 +6,14 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { createSetupAccount } from '@/stores/auth'
+import { setPageTitle } from '@/stores/site'
 import { notify } from '@/stores/toast'
 
 const router = useRouter()
 const loading = ref(false)
 const form = reactive({ username: '', displayName: '', password: '', confirm: '' })
+
+setPageTitle('初始化')
 
 async function submit() {
   if (!form.username.trim()) return notify('请输入用户名', 'error')

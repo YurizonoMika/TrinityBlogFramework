@@ -6,13 +6,15 @@ import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { login } from '@/stores/auth'
-import { site, toggleTheme } from '@/stores/site'
+import { setPageTitle, site, toggleTheme } from '@/stores/site'
 import { notify } from '@/stores/toast'
 
 const router = useRouter()
 const route = useRoute()
 const loading = ref(false)
 const form = reactive({ username: '', password: '' })
+
+setPageTitle('登录')
 
 async function submit() {
   if (!form.username || !form.password) return notify('请输入用户名和密码', 'error')

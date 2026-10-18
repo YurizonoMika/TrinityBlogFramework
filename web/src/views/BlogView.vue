@@ -10,7 +10,7 @@ import { api } from '@/lib/api'
 import { excerpt } from '@/lib/markdown'
 import { formatDate, readingTime } from '@/lib/format'
 import { auth, can } from '@/stores/auth'
-import { site } from '@/stores/site'
+import { setPageTitle, site } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import type { Post } from '@/lib/types'
 
@@ -45,6 +45,7 @@ const filtered = computed(() => {
 
 async function load() {
   loading.value = true
+  setPageTitle('博客')
   try {
     const all = auth.user ? '&all=1' : ''
     const scope = routeUsername.value ? `&username=${encodeURIComponent(routeUsername.value)}` : ''

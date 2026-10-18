@@ -17,7 +17,7 @@ import PluginView from '@/components/PluginView.vue'
 import { api } from '@/lib/api'
 import { useDragSort } from '@/lib/useDragSort'
 import { auth } from '@/stores/auth'
-import { site } from '@/stores/site'
+import { setPageTitle, site } from '@/stores/site'
 import { notify } from '@/stores/toast'
 import { plugins, findPlugin } from '@/lib/plugins'
 import type {
@@ -172,6 +172,8 @@ async function loadPosts() {
 
 async function loadAll() {
   await Promise.all([loadProfile(), loadCards(), loadPosts()])
+  const name = targetProfile.value?.display_name?.trim() || (targetProfile.value?.username ? `@${targetProfile.value.username}` : '')
+  setPageTitle(name)
 }
 
 onMounted(async () => {

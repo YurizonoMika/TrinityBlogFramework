@@ -92,23 +92,66 @@ export async function applyDynamic() {
   applyTheme()
 }
 
+// A blank inline favicon used when the site owner hasn't uploaded one. It is a
+// data URI on purpose: browsers cache favicons by URL, so pointing at a shared
+// `/favicon.svg` meant visitors kept seeing a stale (previously branded) icon
+// even after it changed. An inline icon can never be stale.
+const BLANK_ICON =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'/%3E"
+
 export function applyFavicon() {
-  const href = site.site.icon || '/favicon.svg'
+  // The server injects the correct favicon into the HTML at load time. Before
+  // the site settings have loaded we must not clobber it with the blank default
+  // (doing so would flash a transparent icon and would be what history grabs).
+  if (!site.loaded) return
+  const href = site.site.icon || BLANK_ICON
+  // detect the format so the browser accepts PNG / JPG / SVG the user uploaded
+  const ext = href.startsWith('data:image/png') || href.includes('.png') ? 'image/png'
+    : href.startsWith('data:image/jpeg') || href.includes('.jpg') || href.includes('.jpeg') ? 'image/jpeg'
+    : href.includes('.webp') ? 'image/webp'
+    : href.includes('.gif') ? 'image/gif'
+    : 'image/svg+xml'
   let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
   if (!link) {
     link = document.createElement('link')
     link.rel = 'icon'
     document.head.appendChild(link)
   }
-  link.setAttribute('href', href)
+  // only update when it changed, to avoid needless re-fetches
+  if (link.getAttribute('href') !== href) link.setAttribute('href', href)
+  link.setAttribute('type', ext)
   let apple = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')
   if (!apple) {
     apple = document.createElement('link')
     apple.rel = 'apple-touch-icon'
     document.head.appendChild(apple)
   }
-  apple.setAttribute('href', href)
+  if (apple.getAttribute('href') !== href) apple.setAttribute('href', href)
+  apple.setAttribute('type', ext)
 }
+
+// The current page name (last one passed to setPageTitle). Used to keep the
+// browser tab title in sync when the site title changes without a navigation.
+let currentPageTitle = ''
+
+/**
+ * Compose the browser tab title: `<site name> - <page>`. Pass an empty page
+ * (or call without arguments) to set just the site name — used for the home
+ * page where the site name alone is the most natural label.
+ */
+export function setPageTitle(page: string) {
+  currentPageTitle = page
+  applyPageTitle()
+}
+
+function applyPageTitle() {
+  const siteName = (site.site.title || '').trim() || '我的主页'
+  document.title = currentPageTitle ? `${siteName} - ${currentPageTitle}` : siteName
+}
+
+// Keep the tab title in sync when the site name changes (e.g. after saving
+// the site settings) — we already know the current page.
+watch(() => site.site.title, () => applyPageTitle())
 
 export function toggleTheme() {
   site.theme = site.theme === 'dark' ? 'light' : 'dark'
@@ -132,7 +175,8 @@ export async function loadPublicSite(username = '') {
   site.integrations = data.integrations || {}
   site.loaded = true
   await applyDynamic()
-  if (site.site.title) document.title = site.site.title
+  applyFavicon()
+  applyPageTitle()
 }
 
 export async function loadFullSettings() {
@@ -179,7 +223,8 @@ export async function saveSiteSettings(patch: Partial<SiteSettings>) {
   })
   site.site = updated
   await applyDynamic()
-  if (site.site.title) document.title = site.site.title
+  applyFavicon()
+  applyPageTitle()
 }
 
 export async function saveIntegrations(patch: Integrations) {

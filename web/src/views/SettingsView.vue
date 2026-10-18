@@ -17,6 +17,7 @@ import {
   saveHomepage,
   saveIntegrations,
   saveSiteSettings,
+  setPageTitle,
   site,
   toggleTheme,
   applyTheme,
@@ -78,8 +79,12 @@ const themeBusy = ref(false)
 const themeOptions = ref<Record<string, unknown>>({})
 const currentTheme = computed(() => themes.value.find((t) => t.id === themeChoice.value) || null)
 function resetThemeOptions() {
-  const defs = currentTheme.value?.options || []
-  const next: Record<string, unknown> = {}
+  // don't touch the values until the theme list is loaded, otherwise the
+  // initial load (which sets themeChoice before loadThemes resolves) would
+  // wipe the saved option values
+  if (!currentTheme.value) return
+  const defs = currentTheme.value.options || []
+  const next: Record<string, unknown> = { ...themeOptions.value }
   for (const o of defs) next[o.id] = themeOptions.value[o.id] ?? o.default ?? ''
   themeOptions.value = next
 }
@@ -269,6 +274,7 @@ async function load() {
 }
 
 onMounted(() => {
+  setPageTitle('设置')
   load()
   loadNintendoStatus()
   loadInstalledPlugins()
@@ -1468,7 +1474,7 @@ const PERMISSION_LABELS: Record<string, string> = {
             <select v-model="themeChoice" class="field-input">
               <option value="">默认（无主题）</option>
               <option v-for="t in themes" :key="t.id" :value="t.id">
-                {{ t.name }}<template v-if="t.version"> · v{{ t.version }}</template>
+                {{ t.name }}
               </option>
             </select>
             <span class="field-label">应用主题</span>
@@ -1537,7 +1543,7 @@ const PERMISSION_LABELS: Record<string, string> = {
           <template v-if="isAdminUser">
             <div class="divider" />
             <div class="sub-head">
-              <span class="mini-label">主题库</span>
+              <span class="mini-label">已安装的主题</span>
               <label class="btn btn-tonal btn-sm">
                 <span v-if="themeBusy" class="spinner" style="width: 15px; height: 15px" />
                 <AppIcon v-else name="upload" :size="15" />导入主题（.zip）

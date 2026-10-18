@@ -12,7 +12,7 @@ import { api, uploadFile } from '@/lib/api'
 import { renderMarkdown } from '@/lib/markdown'
 import { readingTime } from '@/lib/format'
 import { notify } from '@/stores/toast'
-import { site } from '@/stores/site'
+import { setPageTitle, site } from '@/stores/site'
 import { plugins } from '@/lib/plugins'
 import type { Post, RuntimePlugin } from '@/lib/types'
 
@@ -122,6 +122,7 @@ function openPluginEditor(pluginId: string, editId: string) {
 const moduleEditorBridge = (pluginId: string) => ({ edit: (id: string) => openPluginEditor(pluginId, id) })
 
 async function load() {
+  setPageTitle(isEdit.value ? '编辑文章' : '写文章')
   if (!isEdit.value) return
   loading.value = true
   try {
