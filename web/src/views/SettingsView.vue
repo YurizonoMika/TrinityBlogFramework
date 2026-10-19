@@ -413,6 +413,92 @@ async function clearPluginStorage(owner: string, id: string, name: string) {
   }
 }
 
+interface CompressFile {
+  path: string
+  size: number
+}
+
+const compressDialog = reactive({
+  open: false,
+  phase: 'confirm' as 'confirm' | 'running' | 'done' | 'error',
+  total: 0,
+  bytes: 0,
+  done: 0,
+  compressed: 0,
+  failed: 0,
+  before: 0,
+  after: 0,
+  current: '',
+  error: '',
+})
+let compressFiles: CompressFile[] = []
+const compressPct = computed(() =>
+  compressDialog.total ? Math.min(100, Math.round((compressDialog.done / compressDialog.total) * 100)) : 0
+)
+const compressSaved = computed(() => Math.max(0, compressDialog.before - compressDialog.after))
+
+async function openCompressImages() {
+  compressFiles = []
+  Object.assign(compressDialog, {
+    open: true,
+    phase: 'confirm',
+    total: 0,
+    bytes: 0,
+    done: 0,
+    compressed: 0,
+    failed: 0,
+    before: 0,
+    after: 0,
+    current: '',
+    error: '',
+  })
+  try {
+    const res = await api<{ files: CompressFile[]; total: number; bytes: number }>(
+      '/settings/storage/compressible'
+    )
+    compressFiles = res.files || []
+    compressDialog.total = res.total || 0
+    compressDialog.bytes = res.bytes || 0
+  } catch (e: any) {
+    compressDialog.error = e.message || '读取可压缩图片失败'
+    compressDialog.phase = 'error'
+  }
+}
+
+async function startCompressImages() {
+  if (!compressFiles.length) return
+  compressDialog.phase = 'running'
+  compressDialog.done = 0
+  compressDialog.compressed = 0
+  compressDialog.failed = 0
+  compressDialog.before = 0
+  compressDialog.after = 0
+  try {
+    for (let i = 0; i < compressFiles.length; i++) {
+      const file = compressFiles[i]
+      compressDialog.current = file.path
+      try {
+        const r = await api<{ compressed: boolean; before: number; after: number }>(
+          '/settings/storage/compress-image',
+          { method: 'POST', body: { path: file.path } }
+        )
+        compressDialog.before += r.before || 0
+        compressDialog.after += r.after || 0
+        if (r.compressed) compressDialog.compressed++
+      } catch {
+        compressDialog.failed++
+      }
+      compressDialog.done = i + 1
+    }
+    compressDialog.phase = 'done'
+    compressDialog.current = ''
+    await loadStorage()
+  } catch (e: any) {
+    compressDialog.error = e.message || '压缩失败'
+    compressDialog.phase = 'error'
+  }
+}
+
 watch(
   tab,
   (t) => {
@@ -2410,12 +2496,58 @@ const PERMISSION_LABELS: Record<string, string> = {
 
               <div class="panel-actions">
                 <button class="btn btn-outlined" @click="loadStorage"><AppIcon name="refresh" :size="16" />刷新</button>
+                <button v-if="isAdminUser" class="btn btn-outlined" @click="openCompressImages"><AppIcon name="image" :size="16" />压缩图片</button>
                 <button class="btn btn-outlined" @click="cleanOrphans"><AppIcon name="delete" :size="16" />清理孤立文件</button>
                 <button class="btn btn-outlined" @click="vacuumDb"><AppIcon name="storage" :size="16" />整理数据库</button>
               </div>
             </template>
           </template>
         </section>
+
+    <!-- compress images -->
+    <BaseDialog :open="compressDialog.open" title="压缩图片" @close="compressDialog.open = false">
+      <template v-if="compressDialog.phase === 'confirm'">
+        <p>
+          将对站点中的 <strong>{{ compressDialog.total }}</strong> 张图片（共
+          {{ fmtBytes(compressDialog.bytes) }}）进行高质量压缩。
+        </p>
+        <p class="md-muted tiny" style="margin-top: 8px">
+          压缩会覆盖原文件，文件名与位置保持不变；已足够小的图片会自动跳过。该操作不可撤销。
+        </p>
+        <p v-if="!compressDialog.total" class="md-muted" style="margin-top: 8px">没有可压缩的图片。</p>
+      </template>
+
+      <template v-else-if="compressDialog.phase === 'running'">
+        <p class="md-muted">正在压缩 {{ compressDialog.done }} / {{ compressDialog.total }} …</p>
+        <div class="compress-bar"><div class="compress-bar-fill" :style="{ width: compressPct + '%' }" /></div>
+        <p class="md-muted tiny" style="word-break: break-all">{{ compressDialog.current }}</p>
+      </template>
+
+      <template v-else-if="compressDialog.phase === 'done'">
+        <p><strong>压缩已完成</strong></p>
+        <p class="md-muted" style="margin-top: 6px">
+          共处理 {{ compressDialog.total }} 张，压缩 {{ compressDialog.compressed }} 张，节省
+          {{ fmtBytes(compressSaved) }}<template v-if="compressDialog.failed">；失败 {{ compressDialog.failed }} 张</template>。
+        </p>
+      </template>
+
+      <p v-else style="color: var(--md-error)">{{ compressDialog.error }}</p>
+
+      <template #actions>
+        <template v-if="compressDialog.phase === 'confirm'">
+          <button class="btn" @click="compressDialog.open = false">取消</button>
+          <button class="btn btn-filled" :disabled="!compressDialog.total" @click="startCompressImages">
+            <AppIcon name="image" :size="16" />确认压缩
+          </button>
+        </template>
+        <template v-else-if="compressDialog.phase === 'running'">
+          <button class="btn" disabled>压缩中…</button>
+        </template>
+        <template v-else>
+          <button class="btn btn-filled" @click="compressDialog.open = false">完成</button>
+        </template>
+      </template>
+    </BaseDialog>
 
     <!-- add user -->
     <BaseDialog :open="addUserOpen" title="添加用户" @close="addUserOpen = false">
@@ -3000,6 +3132,8 @@ const PERMISSION_LABELS: Record<string, string> = {
   background: var(--md-surface-container-highest);
   overflow: hidden;
 }
+.compress-bar { height: 8px; border-radius: 999px; background: var(--md-surface-container-highest); overflow: hidden; margin: 12px 0 8px; }
+.compress-bar-fill { height: 100%; border-radius: 999px; background: var(--md-primary); transition: width 0.2s var(--md-ease-standard); }
 .storage-bar-fill {
   height: 100%;
   border-radius: var(--md-shape-full);

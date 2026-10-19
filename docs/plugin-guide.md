@@ -151,9 +151,19 @@ plugin.registerEditorTool({ id, label, icon, ui })// 编辑器工具栏按钮（
 
 `handler` 签名：
 
-- **路由**：`handler(req) => any`，`req = { method, query, params, body, path, authed }`
-  - `authed` 为 `true` 表示调用者是插件所属用户本人或管理员（普通访客为 `false`）。
+- **路由**：`handler(req) => any`，`req` 结构如下：
+  | 字段 | 说明 |
+  |---|---|
+  | `method` / `query` / `params` / `body` / `path` | 请求方法、查询参数、路由参数、请求体、路径 |
+  | `authed` | 调用者是插件所属用户本人或管理员（普通访客为 `false`） |
+  | `isAdmin` | 调用者是管理员（admin / super） |
+  | `viewer` | 当前会话用户 `{ id, username }`，访客为 `null` |
+  | `ip` | 客户端 IP（自 **SDK 1.1.0** 起提供；已启用 `trust proxy`，位于 Nginx/Caddy 后为真实 IP） |
+
   - 返回值会作为 `{ data: ... }` 返回给前端。
+  - 旧版本框架没有 `req.ip`；依赖它的插件建议在 `plugin.json` 写 `"minSdkVersion": "1.1.0"`。
+  - 访客可调用的接口务必自行校验输入类型（拒绝 `null` / 数组 / 错误类型）并限制大小，
+    参见「权限与安全模型」。
 - **数据源**：`handler(query) => any`，`query` 为查询字符串对象。
 
 ```js
@@ -468,7 +478,7 @@ export function mount(ctx) {
 ```
 id · manifest · permissions · hasPermission(p) · log(...)
 
-registerRoute(name, handler(req))         req = { method, query, params, body, path, authed }
+registerRoute(name, handler(req))         req = { method, query, params, body, path, authed, isAdmin, viewer, ip }
 registerCardSource(id, handler(query))
 registerWidget/Page/Overlay/Topbar/PostModule/EditorTool(def)
 

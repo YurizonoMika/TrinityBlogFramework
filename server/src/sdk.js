@@ -6,7 +6,7 @@
  * declare `minSdkVersion` in its manifest; installing/loading it is refused when
  * the running framework is older than the requirement.
  */
-export const SDK_VERSION = '1.0.0'
+export const SDK_VERSION = '1.1.0'
 
 function parseSemver(v) {
   return String(v || '')

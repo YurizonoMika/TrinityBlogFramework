@@ -294,6 +294,9 @@ async function handleCall(req, res) {
       authed,
       isAdmin: Boolean(caller && isAdminUser(caller)),
       viewer: caller ? { id: caller.id, username: caller.username } : null,
+      // client IP (respects `trust proxy`) — plugins may use it for e.g.
+      // "has this visitor already taken part?" checks
+      ip: req.ip || '',
     })
     if (result === undefined || result === null) return res.json({ ok: true })
     res.json({ data: result })

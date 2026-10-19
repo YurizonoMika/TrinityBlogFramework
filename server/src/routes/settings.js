@@ -2,7 +2,10 @@
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
 import { Router } from 'express'
-import { db, getSetting, setSetting, getUserSetting, setUserSetting, primaryUserId } from '../db.js'
+import sharp from 'sharp'
+import { readdirSync, statSync, renameSync, rmSync, existsSync } from 'node:fs'
+import { join, extname, resolve, sep } from 'node:path'
+import { db, getSetting, setSetting, getUserSetting, setUserSetting, primaryUserId, UPLOAD_DIR } from '../db.js'
 import { requireAuth, requireAdmin, hashPassword, verifyPassword, publicUser, isAdminUser } from '../auth.js'
 import { extractSeedColor, resolveThemeSource } from '../seed.js'
 import { pageUsername } from '../scope.js'
@@ -282,6 +285,106 @@ router.post('/storage/plugin/:id/clear', requireAuth, requireAdmin, (req, res) =
       : { id: primaryUserId() }
     const result = clearPluginStorage(owner?.id ?? primaryUserId(), req.params.id)
     res.json({ ...result, storage: getStorageOverview({ isAdmin: true }) })
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) })
+  }
+})
+
+/* ---------------- image compression ---------------- */
+
+const COMPRESS_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.avif'])
+// never touch the gallery (the gallery plugin keeps its own storage outside
+// uploads; this also guards a/the folder if one is ever placed in uploads)
+const GALLERY_RE = /(^|\/)(gallery|图库)(\/|$)/i
+
+function walkImages(dir, prefix, out) {
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const abs = join(dir, entry.name)
+    const rel = prefix ? prefix + '/' + entry.name : entry.name
+    if (entry.isDirectory()) {
+      walkImages(abs, rel, out)
+      continue
+    }
+    if (!entry.isFile() || GALLERY_RE.test(rel)) continue
+    if (!COMPRESS_EXT.has(extname(entry.name).toLowerCase())) continue
+    try {
+      out.push({ path: rel, size: statSync(abs).size })
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function safeUploadPath(rel) {
+  const clean = String(rel || '').replace(/\\/g, '/')
+  if (!clean || clean.includes('..')) return null
+  const base = resolve(UPLOAD_DIR)
+  const abs = resolve(base, clean)
+  if (abs !== base && !abs.startsWith(base + sep)) return null
+  return abs
+}
+
+/** Re-encode an image in place with high-quality settings. Returns sizes. */
+async function compressInPlace(abs) {
+  const ext = extname(abs).toLowerCase()
+  const before = statSync(abs).size
+  const tmp = abs + '.compress-' + process.pid + '-' + Date.now()
+  let pipeline = sharp(abs).rotate()
+  if (ext === '.jpg' || ext === '.jpeg') {
+    pipeline = pipeline.jpeg({ quality: 85, mozjpeg: true })
+  } else if (ext === '.png') {
+    pipeline = pipeline.png({ compressionLevel: 9, palette: true, quality: 92, effort: 7, dither: 1 })
+  } else if (ext === '.webp') {
+    pipeline = pipeline.webp({ quality: 88, effort: 4 })
+  } else if (ext === '.avif') {
+    pipeline = pipeline.avif({ quality: 60, effort: 4 })
+  } else {
+    return { compressed: false, before, after: before }
+  }
+  try {
+    await pipeline.toFile(tmp)
+    const after = statSync(tmp).size
+    // only replace when it actually helps, and never grow the file
+    if (after > 0 && after < before) {
+      renameSync(tmp, abs)
+      return { compressed: true, before, after }
+    }
+    rmSync(tmp, { force: true })
+    return { compressed: false, before, after: before }
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw err
+  }
+}
+
+router.get('/storage/compressible', requireAuth, requireAdmin, (req, res) => {
+  const files = []
+  walkImages(UPLOAD_DIR, '', files)
+  res.json({
+    files,
+    total: files.length,
+    bytes: files.reduce((sum, f) => sum + f.size, 0),
+  })
+})
+
+router.post('/storage/compress-image', requireAuth, requireAdmin, async (req, res) => {
+  const rel = String((req.body && req.body.path) || '')
+  const abs = safeUploadPath(rel)
+  if (!abs) return res.status(400).json({ error: '无效路径' })
+  if (!existsSync(abs)) return res.status(404).json({ error: '文件不存在' })
+  if (!COMPRESS_EXT.has(extname(abs).toLowerCase()) || GALLERY_RE.test(rel)) {
+    return res.status(400).json({ error: '该文件不支持压缩' })
+  }
+  try {
+    const result = await compressInPlace(abs)
+    res.json({ ok: true, path: rel, ...result })
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) })
   }

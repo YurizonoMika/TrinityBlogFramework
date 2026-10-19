@@ -136,6 +136,12 @@ export function createApp() {
     } catch {
       indexTemplate = ''
     }
+    const escapeHtml = (v) =>
+      String(v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
     const renderIndex = () => {
       const icon = siteIcon()
       const href = icon || BLANK_ICON
@@ -143,7 +149,12 @@ export function createApp() {
       const links =
         `<link rel="icon" href="${href}" type="${type}" />\n` +
         `    <link rel="apple-touch-icon" href="${href}" />`
-      return indexTemplate.replace(/<link rel="icon"[^>]*>/, links)
+      // Also inject the site name into <title> so the tab never flashes the
+      // build-time default ("我的主页") before the SPA sets the full title.
+      const siteTitle = String(getSetting('site', {}).title || '').trim() || '我的主页'
+      return indexTemplate
+        .replace(/<link rel="icon"[^>]*>/, links)
+        .replace(/<title>[\s\S]*?<\/title>/, `<title>${escapeHtml(siteTitle)}</title>`)
     }
     const sendIndex = (res) => {
       if (!indexTemplate) return res.sendFile(join(distDir, 'index.html'))

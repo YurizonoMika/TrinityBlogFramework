@@ -9,6 +9,7 @@ import { site } from '@/stores/site'
 defineProps<{ open: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
+const version = __APP_VERSION__
 const year = new Date().getFullYear()
 
 interface Component {
@@ -54,7 +55,10 @@ const components: Component[] = [
   <BaseDialog :open="open" title="版权与开源许可" wide @close="emit('close')">
     <div class="credits-head">
       <div>
-        <h3>{{ 'Trinity Blog Framework' }}</h3>
+        <h3>
+          Trinity Blog Framework
+          <span class="credits-app-ver">v{{ version }}</span>
+        </h3>
         <p class="md-muted">Designed By @YurizonoMika, 本应用基于以下开源组件构建。</p>
       </div>
     </div>
@@ -99,6 +103,18 @@ const components: Component[] = [
 </template>
 
 <style scoped>
+.credits-app-ver {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  vertical-align: middle;
+}
 .credits-head {
   display: flex;
   align-items: center;
