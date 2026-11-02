@@ -2,7 +2,7 @@
 <!-- Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika) -->
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import { login } from '@/stores/auth'
@@ -13,6 +13,12 @@ const router = useRouter()
 const route = useRoute()
 const loading = ref(false)
 const form = reactive({ username: '', password: '' })
+
+// match the public site: same logo as the top bar and the same banner/gradient
+// as the home hero, so the login screen never looks like a separate app
+const logo = computed(() => site.site.icon || '')
+const markInitial = computed(() => (site.site.title || '我').trim().charAt(0).toUpperCase())
+const banner = computed(() => site.homepage?.banner || site.site.banner || '')
 
 setPageTitle('登录')
 
@@ -34,6 +40,17 @@ async function submit() {
 
 <template>
   <div class="login-view">
+    <div
+      v-if="banner"
+      class="login-bg"
+      :style="{ backgroundImage: `url('${banner}')` }"
+    />
+    <div v-if="banner" class="login-scrim" />
+    <template v-else>
+      <div class="login-glow glow-a" />
+      <div class="login-glow glow-b" />
+    </template>
+
     <button class="icon-btn theme-toggle" @click="toggleTheme">
       <AppIcon :name="site.theme === 'dark' ? 'light_mode' : 'dark_mode'" :size="20" />
     </button>
@@ -42,7 +59,10 @@ async function submit() {
       <router-link to="/" class="back">
         <AppIcon name="arrow_back" :size="18" />返回首页
       </router-link>
-      <div class="login-mark">{{ (site.site.title || '我').charAt(0) }}</div>
+      <div class="login-mark" :class="{ 'is-image': !!logo }">
+        <img v-if="logo" :src="logo" alt="" />
+        <span v-else>{{ markInitial }}</span>
+      </div>
       <h1 class="md-headline">{{ site.site.title || '我的主页' }}</h1>
       <p class="md-muted">登录以管理你的内容</p>
 
@@ -72,37 +92,99 @@ async function submit() {
   place-items: center;
   min-height: 100vh;
   padding: 24px;
-  background:
-    radial-gradient(60vw 60vw at 15% 10%, var(--md-primary-container), transparent 60%),
-    radial-gradient(50vw 50vw at 90% 90%, var(--md-tertiary-container), transparent 60%),
-    var(--md-surface);
+  overflow: hidden;
+  /* same fallback gradient as the home hero */
+  background: linear-gradient(
+    135deg,
+    var(--md-primary-container) 0%,
+    var(--md-tertiary-container) 55%,
+    var(--md-secondary-container) 100%
+  );
+  color: var(--md-on-primary-container);
+}
+.login-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  transform: scale(1.04);
+}
+.login-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(180deg, rgb(0 0 0 / 0.34), rgb(0 0 0 / 0.6));
+}
+.login-glow {
+  position: absolute;
+  z-index: 0;
+  width: 56vw;
+  height: 56vw;
+  max-width: 720px;
+  max-height: 720px;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.45;
+  pointer-events: none;
+}
+.glow-a {
+  top: -18%;
+  left: -10%;
+  background: var(--md-primary);
+}
+.glow-b {
+  right: -10%;
+  bottom: -18%;
+  background: var(--md-tertiary);
 }
 .theme-toggle {
   position: absolute;
   top: 20px;
   right: 20px;
+  z-index: 3;
+  color: var(--md-on-surface);
+  background: color-mix(in srgb, var(--md-surface) 58%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
+  box-shadow: var(--md-elev-1);
 }
 .login-card {
+  position: relative;
+  z-index: 2;
   width: min(420px, 100%);
   padding: 36px 32px;
-  border-radius: var(--md-shape-2xl);
-  background: color-mix(in srgb, var(--md-surface-container-low) 88%, transparent);
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
-  box-shadow: var(--md-elev-2);
+  border-radius: var(--dialog-radius);
+  color: var(--md-on-surface);
+  background: color-mix(in srgb, var(--md-surface-container-low) 90%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid color-mix(in srgb, var(--md-outline-variant) 55%, transparent);
+  box-shadow: var(--md-elev-3);
   animation: pop-in var(--md-dur-long) var(--md-ease-expressive);
 }
 .login-mark {
-  width: 60px;
-  height: 60px;
+  width: 64px;
+  height: 64px;
   border-radius: var(--md-shape-lg);
   background: var(--md-primary);
   color: var(--md-on-primary);
   display: grid;
   place-items: center;
-  font-size: 1.7rem;
+  font-size: 1.8rem;
   font-weight: 800;
   margin-bottom: 18px;
+  overflow: hidden;
+  flex: none;
+  box-shadow: var(--md-elev-1);
+}
+.login-mark.is-image {
+  background: var(--md-surface-container-high);
+}
+.login-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .login-card h1 {
   margin-bottom: 4px;
