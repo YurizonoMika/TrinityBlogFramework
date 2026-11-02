@@ -19,6 +19,9 @@ import {
   getPluginUi,
   pluginAssetPath,
   callRoute,
+  resolveApiEndpoint,
+  callApi,
+  getPluginToken,
   getCardData,
   hasCardSource,
   listPluginStorage,
@@ -51,6 +54,19 @@ function ownerFrom(req) {
     }
     return viewer
   }
+  const username = pageUsername(req)
+  if (username) {
+    const u = db.prepare('SELECT * FROM users WHERE username = ?').get(String(username))
+    if (u) return u
+  }
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(primaryUserId())
+}
+
+/** The owner an *outward* (public/token) API endpoint targets: `?username=` /
+ *  page owner, otherwise the site owner. Unlike `ownerFrom`, the caller's
+ *  session does not change the target — any logged-in visitor may call a
+ *  public endpoint. */
+function publicOwnerFrom(req) {
   const username = pageUsername(req)
   if (username) {
     const u = db.prepare('SELECT * FROM users WHERE username = ?').get(String(username))
@@ -307,6 +323,202 @@ async function handleCall(req, res) {
 
 router.get('/:id/call/:name', handleCall)
 router.post('/:id/call/:name', handleCall)
+
+/* ------------------------------------------------------------------ */
+/* outward-facing plugin API                                           */
+/* ------------------------------------------------------------------ */
+
+function applyApiCors(res, methods) {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Vary', 'Origin')
+  res.setHeader('Access-Control-Allow-Methods', [...new Set([...methods, 'OPTIONS'])].join(', '))
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With')
+  res.setHeader('Access-Control-Expose-Headers', '*')
+  res.setHeader('Access-Control-Max-Age', '86400')
+}
+
+function bearerToken(req) {
+  const match = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '')
+  return match ? match[1].trim() : ''
+}
+
+function tokenEquals(a, b) {
+  const x = Buffer.from(String(a || ''))
+  const y = Buffer.from(String(b || ''))
+  if (!x.length || x.length !== y.length) return false
+  return crypto.timingSafeEqual(x, y)
+}
+
+function makeApiReply() {
+  const reply = {
+    statusCode: 200,
+    headers: {},
+    sent: false,
+    jsonBody: false,
+    body: undefined,
+    status(code) {
+      const n = Number(code)
+      if (Number.isInteger(n) && n >= 100 && n <= 599) reply.statusCode = n
+      return reply
+    },
+    header(name, value) {
+      if (name) reply.headers[String(name)] = String(value)
+      return reply
+    },
+    type(value) {
+      if (value) reply.headers['Content-Type'] = String(value)
+      return reply
+    },
+    json(data) {
+      reply.body = data
+      reply.jsonBody = true
+      reply.sent = true
+      return reply
+    },
+    send(data) {
+      reply.body = data
+      reply.jsonBody = false
+      reply.sent = true
+      return reply
+    },
+    end() {
+      reply.body = undefined
+      reply.sent = true
+      return reply
+    },
+  }
+  return reply
+}
+
+async function handleApi(req, res) {
+  const id = req.params.id
+  // Public endpoints target the explicit/page owner or the site owner even when
+  // the caller is logged in as someone else. Non-public endpoints stay scoped
+  // to the caller's session (account isolation).
+  const publicOwner = publicOwnerFrom(req)
+  const sessionOwner = ownerFrom(req)
+
+  let owner = null
+  let state = null
+  let resolved = null
+
+  if (publicOwner) {
+    const publicState = getPluginStates(publicOwner.id)[id]
+    if (publicState?.enabled) {
+      const candidate = resolveApiEndpoint(publicOwner.id, id, req.params[0], req.method)
+      const outward = candidate?.endpoint.auth === 'public' || candidate?.endpoint.auth === 'token'
+      if (outward && (candidate.endpoint.auth !== 'public' || publicState.visitor)) {
+        owner = publicOwner
+        state = publicState
+        resolved = candidate
+      }
+    }
+  }
+  if (!resolved && sessionOwner) {
+    const sessionState = getPluginStates(sessionOwner.id)[id]
+    if (sessionState?.enabled) {
+      const candidate = resolveApiEndpoint(sessionOwner.id, id, req.params[0], req.method)
+      if (candidate) {
+        owner = sessionOwner
+        state = sessionState
+        resolved = candidate
+      }
+    }
+  }
+  if (!owner || !state || !resolved) return res.status(404).json({ error: '接口不存在' })
+
+  const endpoint = resolved.endpoint
+
+  if (endpoint.cors) applyApiCors(res, resolved.allowed)
+  if (req.method === 'OPTIONS' && endpoint.cors) return res.status(204).end()
+  if (!resolved.methodMatched) {
+    const allow = [...new Set(resolved.allowed.flatMap((m) => (m === 'GET' ? ['GET', 'HEAD'] : [m])))]
+    res.setHeader('Allow', allow.join(', '))
+    return res.status(405).json({ error: '请求方法不被允许' })
+  }
+  if (!resolved.handler) return res.status(404).json({ error: '接口未实现' })
+
+  // an endpoint is only exposed publicly after the owner explicitly publishes
+  // the plugin to visitors
+  if (endpoint.auth === 'public' && !state.visitor) {
+    return res.status(404).json({ error: '接口不存在' })
+  }
+
+  const caller = resolvePluginUser(req, owner.id)
+  const isOwner = Boolean(caller && caller.id === owner.id)
+  const isAdmin = Boolean(caller && isAdminUser(caller))
+  const bearer = bearerToken(req)
+
+  if (endpoint.auth === 'owner' && !(isOwner || isAdmin)) {
+    return res.status(403).json({ error: '没有权限' })
+  }
+  if (endpoint.auth === 'admin' && !isAdmin) {
+    return res.status(403).json({ error: '需要管理员权限' })
+  }
+  if (endpoint.auth === 'token') {
+    if (!Array.isArray(state.permissions) || !state.permissions.includes('token')) {
+      return res.status(403).json({ error: '插件未获得 token 权限' })
+    }
+    const expected = getPluginToken(owner.id, id)
+    if (!expected) return res.status(503).json({ error: '未配置 API 令牌' })
+    if (!isOwner && !isAdmin && !tokenEquals(bearer, expected)) {
+      return res.status(401).json({ error: 'API 令牌无效' })
+    }
+  }
+
+  // keep cookie-authenticated owner/admin endpoints safe from CSRF; external
+  // clients should send a Bearer token instead
+  const stateChanging = !['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+  if (
+    stateChanging &&
+    (endpoint.auth === 'owner' || endpoint.auth === 'admin') &&
+    !bearer &&
+    req.get('x-requested-with') !== 'XMLHttpRequest'
+  ) {
+    return res.status(403).json({ error: '请求被拒绝（缺少 CSRF 标记）' })
+  }
+
+  // never hand session cookies or credentials to plugin code
+  const headers = { ...req.headers }
+  delete headers.cookie
+  delete headers.authorization
+
+  const reply = makeApiReply()
+  try {
+    const result = await callApi(
+      owner.id,
+      id,
+      endpoint.name,
+      {
+        method: req.method,
+        path: req.path,
+        params: resolved.params,
+        query: req.query,
+        body: req.body,
+        headers,
+        authed: Boolean(isOwner || isAdmin),
+        isAdmin,
+        viewer: caller ? { id: caller.id, username: caller.username } : null,
+        ip: req.ip || '',
+        endpoint: { name: endpoint.name, path: endpoint.path, auth: endpoint.auth },
+        apiAuth: endpoint.auth,
+      },
+      reply
+    )
+    for (const [name, value] of Object.entries(reply.headers)) res.setHeader(name, value)
+    res.status(reply.statusCode)
+    if (reply.sent) {
+      if (reply.jsonBody) return res.json(reply.body ?? null)
+      return res.send(reply.body ?? '')
+    }
+    if (result === undefined || result === null) return res.json({ ok: true })
+    return res.json({ data: result })
+  } catch (err) {
+    return res.status(500).json({ error: String(err.message || err) })
+  }
+}
+
+router.all('/:id/api/*', handleApi)
 
 
 export default router

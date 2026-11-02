@@ -26,7 +26,7 @@ import { notify } from '@/stores/toast'
 import { confirmDialog } from '@/stores/dialog'
 import { loadPlugins, plugins } from '@/lib/plugins'
 import { setTheme, setThemeScheme, loadTheme, theme as activeTheme } from '@/stores/theme'
-import type { InstalledPlugin, LinkItem, ProfileTag, Theme } from '@/lib/types'
+import type { InstalledPlugin, LinkItem, PluginApiEndpoint, ProfileTag, Theme } from '@/lib/types'
 
 const route = useRoute()
 const tab = ref<string>((route.query.tab as string) || 'profile')
@@ -63,6 +63,7 @@ interface ImportPreview {
   description: string
   author: string
   permissions: string[]
+  api: PluginApiEndpoint[]
   minSdkVersion: string
   sdkVersion: string
   sdkOk: boolean
@@ -2169,6 +2170,23 @@ const PERMISSION_LABELS: Record<string, string> = {
                 </p>
               </div>
 
+              <div v-if="importPreview.api?.length" class="preview-perms">
+                <span class="mini-label">对外 API 端点</span>
+                <div class="perm-chips">
+                  <span
+                    v-for="endpoint in importPreview.api"
+                    :key="endpoint.name"
+                    class="perm-chip"
+                    :title="`/api/plugins/${importPreview.id}/api/${endpoint.path}`"
+                  >
+                    {{ endpoint.methods.join('/') }} /{{ endpoint.path }} · {{ endpoint.auth }}
+                  </span>
+                </div>
+                <p class="md-muted tiny" style="margin-top: 8px">
+                  public 端点还需开启「对访客开放」后才会生效。
+                </p>
+              </div>
+
               <div
                 class="backup-progress install-progress"
                 :class="{ show: importState.busy, indeterminate: importState.progress === null }"
@@ -2265,7 +2283,7 @@ const PERMISSION_LABELS: Record<string, string> = {
               </div>
 
               <div
-                v-if="managedPlugin.loaded && (managedPlugin.widgets.length || managedPlugin.pages.length || managedPlugin.postModules.length || managedPlugin.overlays.length || managedPlugin.topbars?.length || managedPlugin.editorTools?.length)"
+                v-if="managedPlugin.loaded && (managedPlugin.widgets.length || managedPlugin.pages.length || managedPlugin.postModules.length || managedPlugin.overlays.length || managedPlugin.topbars?.length || managedPlugin.editorTools?.length || managedPlugin.api?.length)"
                 class="plugin-contrib"
               >
                 <span class="mini-label">提供的内容</span>
@@ -2297,6 +2315,12 @@ const PERMISSION_LABELS: Record<string, string> = {
                 <div v-if="managedPlugin.postModules.length" class="contrib-row">
                   <span class="contrib-label">帖子模块</span>
                   <code v-for="m in managedPlugin.postModules" :key="m.id">[[plugin:{{ managedPlugin.id }}/{{ m.id }}]]</code>
+                </div>
+                <div v-if="managedPlugin.api?.length" class="contrib-row">
+                  <span class="contrib-label">API 接口</span>
+                  <code v-for="endpoint in managedPlugin.api" :key="endpoint.name">
+                    {{ endpoint.methods.join('/') }} /api/plugins/{{ managedPlugin.id }}/api/{{ endpoint.path }} · {{ endpoint.auth }}
+                  </code>
                 </div>
               </div>
             </template>

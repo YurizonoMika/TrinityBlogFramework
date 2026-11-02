@@ -9,9 +9,14 @@ export interface DialogOptions {
   confirmText?: string
   cancelText?: string
   danger?: boolean
+  /** prompt only */
+  placeholder?: string
+  inputType?: 'text' | 'password'
+  /** prompt only: initial input value */
+  value?: string
 }
 
-type Kind = 'confirm' | 'alert'
+type Kind = 'confirm' | 'alert' | 'prompt'
 
 interface DialogState {
   open: boolean
@@ -21,7 +26,10 @@ interface DialogState {
   confirmText: string
   cancelText: string
   danger: boolean
-  resolve: ((value: boolean) => void) | null
+  input: string
+  placeholder: string
+  inputType: 'text' | 'password'
+  resolve: ((value: boolean | string | null) => void) | null
 }
 
 export const dialog = reactive<DialogState>({
@@ -32,6 +40,9 @@ export const dialog = reactive<DialogState>({
   confirmText: '确定',
   cancelText: '取消',
   danger: false,
+  input: '',
+  placeholder: '',
+  inputType: 'text',
   resolve: null,
 })
 
@@ -39,17 +50,20 @@ function normalize(opts: DialogOptions | string): DialogOptions {
   return typeof opts === 'string' ? { message: opts } : opts
 }
 
-function open(kind: Kind, opts: DialogOptions | string): Promise<boolean> {
+function open(kind: Kind, opts: DialogOptions | string): Promise<boolean | string | null> {
   const o = normalize(opts)
-  return new Promise<boolean>((resolve) => {
+  return new Promise<boolean | string | null>((resolve) => {
     Object.assign(dialog, {
       open: true,
       kind,
       title: o.title || '',
       message: o.message,
-      confirmText: o.confirmText || (kind === 'confirm' ? '确定' : '知道了'),
+      confirmText: o.confirmText || (kind === 'alert' ? '知道了' : '确定'),
       cancelText: o.cancelText || '取消',
       danger: Boolean(o.danger),
+      input: o.value || '',
+      placeholder: o.placeholder || '',
+      inputType: o.inputType === 'password' ? 'password' : 'text',
       resolve,
     })
   })
@@ -57,7 +71,7 @@ function open(kind: Kind, opts: DialogOptions | string): Promise<boolean> {
 
 /** MD3 confirmation dialog. Resolves true when confirmed, false otherwise. */
 export function confirmDialog(opts: DialogOptions | string): Promise<boolean> {
-  return open('confirm', opts)
+  return open('confirm', opts) as Promise<boolean>
 }
 
 /** MD3 alert dialog. Resolves when dismissed. */
@@ -65,7 +79,12 @@ export function alertDialog(opts: DialogOptions | string): Promise<void> {
   return open('alert', opts).then(() => undefined)
 }
 
-export function resolveDialog(result: boolean) {
+/** MD3 prompt dialog. Resolves the entered string, or null when cancelled. */
+export function promptDialog(opts: DialogOptions | string): Promise<string | null> {
+  return open('prompt', opts) as Promise<string | null>
+}
+
+export function resolveDialog(result: boolean | string | null) {
   const resolve = dialog.resolve
   dialog.open = false
   dialog.resolve = null

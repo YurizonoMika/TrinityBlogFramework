@@ -76,6 +76,14 @@ export interface PluginEditorTool {
   icon: string
 }
 
+export interface PluginApiEndpoint {
+  name: string
+  path: string
+  methods: string[]
+  auth: 'public' | 'owner' | 'admin' | 'token'
+  cors: boolean
+}
+
 export interface RuntimePlugin {
   id: string
   owner?: string
@@ -94,6 +102,7 @@ export interface RuntimePlugin {
   postModules: PluginPage[]
   editorTools: PluginEditorTool[]
   settings: PluginSettingsPanel[]
+  api: PluginApiEndpoint[]
   cardSources: { id: string }[]
 }
 
@@ -113,6 +122,7 @@ export interface InstalledPlugin {
   author: string
   capabilities: Record<string, boolean>
   requestedPermissions: string[]
+  api: PluginApiEndpoint[]
   hasUi: boolean
   hasSources: boolean
   hasApp: boolean

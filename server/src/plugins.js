@@ -39,6 +39,114 @@ const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 export { SDK_VERSION, compareSemver, sdkSatisfies }
 const SCRIPT_TIMEOUT = 1500
 
+const API_AUTHS = new Set(['public', 'owner', 'admin', 'token'])
+const API_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
+const API_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i
+const API_MAX_ENDPOINTS = 50
+
+/** Normalize + validate the `api` block of a plugin manifest. Throws on error. */
+function normalizeApiDeclarations(manifest) {
+  const raw = manifest?.api
+  if (raw == null) return []
+  if (!Array.isArray(raw)) throw new Error('plugin.json 的 api 必须是数组')
+  if (raw.length > API_MAX_ENDPOINTS) throw new Error(`api 端点最多 ${API_MAX_ENDPOINTS} 个`)
+
+  const permissions = Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : []
+  const names = new Set()
+  const routes = new Set()
+  const endpoints = []
+
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('api 端点必须是对象')
+    }
+    const name = String(item.name || '').trim()
+    if (!name || name.length > 64 || !API_NAME_RE.test(name)) {
+      throw new Error('api 端点的 name 无效（只允许字母、数字、下划线和连字符）')
+    }
+    if (names.has(name)) throw new Error(`api 端点 name 重复：${name}`)
+    names.add(name)
+
+    const path = String(item.path || name).trim().replace(/^\/+|\/+$/g, '')
+    if (!path || path.length > 200) throw new Error(`api 端点 ${name} 的 path 无效`)
+    const segments = path.split('/')
+    if (segments.some((s) => !s || s === '.' || s === '..')) {
+      throw new Error(`api 端点 ${name} 的 path 无效`)
+    }
+    const paramNames = new Set()
+    for (const segment of segments) {
+      if (segment.startsWith(':')) {
+        const param = segment.slice(1)
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(param) || paramNames.has(param)) {
+          throw new Error(`api 端点 ${name} 的 path 参数无效`)
+        }
+        paramNames.add(param)
+      } else if (!/^[A-Za-z0-9._~-]+$/.test(segment)) {
+        throw new Error(`api 端点 ${name} 的 path 包含非法字符`)
+      }
+    }
+
+    const rawMethods = item.methods == null
+      ? ['GET']
+      : Array.isArray(item.methods)
+        ? item.methods
+        : [item.methods]
+    const methods = [...new Set(rawMethods.map((m) => String(m).toUpperCase()))]
+    if (!methods.length || methods.some((m) => !API_METHODS.has(m))) {
+      throw new Error(`api 端点 ${name} 的 methods 无效`)
+    }
+    for (const method of methods) {
+      const key = `${path}:${method}`
+      if (routes.has(key)) throw new Error(`api 端点路径重复：${path} ${method}`)
+      routes.add(key)
+    }
+
+    const auth = item.auth == null ? 'owner' : String(item.auth)
+    if (!API_AUTHS.has(auth)) throw new Error(`api 端点 ${name} 的 auth 无效`)
+    if (auth === 'token' && !permissions.includes('token')) {
+      throw new Error(`api 端点 ${name} 使用 token 认证，但 plugin.json 未申请 token 权限`)
+    }
+
+    endpoints.push({ name, path, methods, auth, cors: item.cors === true })
+  }
+  return endpoints
+}
+
+function safeApiDeclarations(manifest) {
+  try {
+    return normalizeApiDeclarations(manifest)
+  } catch {
+    return []
+  }
+}
+
+function normalizeRequestPath(path) {
+  return String(path || '').replace(/^\/+|\/+$/g, '')
+}
+
+function matchApiPath(pattern, actual) {
+  const expected = String(pattern).split('/')
+  const parts = String(actual).split('/')
+  if (expected.length !== parts.length) return null
+  const params = {}
+  for (let i = 0; i < expected.length; i++) {
+    const segment = expected[i]
+    if (segment.startsWith(':')) {
+      if (!parts[i]) return null
+      params[segment.slice(1)] = parts[i]
+    } else if (segment !== parts[i]) {
+      return null
+    }
+  }
+  return params
+}
+
+function apiSpecificity(path) {
+  const segments = String(path).split('/')
+  const literals = segments.filter((s) => !s.startsWith(':')).length
+  return literals * 1000 + String(path).length
+}
+
 // in-memory runtime registry: `${userId}:${id}` -> { manifest, dir, registrations }
 const runtime = new Map()
 
@@ -207,6 +315,7 @@ export function listPlugins(userId) {
       author: manifest.author || '',
       capabilities: manifest.capabilities || {},
       requestedPermissions: manifest.permissions || [],
+      api: reg?.api || safeApiDeclarations(manifest),
       hasUi: meta.hasUi,
       hasJs: meta.hasJs,
       hasSources: existsSync(join(pluginDir(userId, id), 'sources')),
@@ -259,6 +368,7 @@ export function parsePluginPackage(buffer) {
   const id = String(manifest.id || '').trim()
   if (!ID_RE.test(id)) throw new Error('plugin.json 的 id 无效（只允许小写字母、数字、连字符）')
   if (!manifest.name) throw new Error('plugin.json 缺少 name')
+  normalizeApiDeclarations(manifest)
   return { zip, manifest, id, rootPrefix }
 }
 
@@ -274,6 +384,7 @@ export function inspectPlugin(buffer, ownerId = null) {
     description: manifest.description || '',
     author: manifest.author || '',
     permissions: Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : [],
+    api: normalizeApiDeclarations(manifest),
     minSdkVersion,
     sdkVersion: SDK_VERSION,
     sdkOk: sdkSatisfies(minSdkVersion),
@@ -412,6 +523,14 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
 
     registerRoute(name, handler) {
       if (typeof handler === 'function') registrations.routes[name] = handler
+    },
+    registerApi(name, handler) {
+      const n = String(name || '').trim()
+      if (!registrations.api.some((endpoint) => endpoint.name === n)) {
+        api.log(`registerApi("${n}") 未在 plugin.json 的 api 中声明，已忽略`)
+        return
+      }
+      if (typeof handler === 'function') registrations.apis[n] = handler
     },
     registerCardSource(id, handler) {
       if (typeof handler === 'function') registrations.cardSources[id] = handler
@@ -579,7 +698,14 @@ function loadPlugin(userId, id) {
   const appPath = join(dir, 'app.js')
   if (!existsSync(appPath)) return markError(userId, id, 'app.js 缺失')
 
-  const registrations = { routes: {}, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], footer: [], postModules: [], editorTools: [], settings: [] }
+  let api
+  try {
+    api = normalizeApiDeclarations(manifest)
+  } catch (err) {
+    return markError(userId, id, String(err?.message || err))
+  }
+
+  const registrations = { routes: {}, apis: {}, api, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], footer: [], postModules: [], editorTools: [], settings: [] }
   try {
     const sandbox = buildSandbox(userId, id, manifest, dir, registrations)
     const context = vm.createContext(sandbox)
@@ -746,6 +872,7 @@ export function getRuntimeManifest(canSeePrivate, userId) {
       footer: registrations.footer,
       postModules: registrations.postModules,
       editorTools: registrations.editorTools,
+      api: registrations.api || [],
       cardSources: Object.keys(registrations.cardSources).map((s) => ({ id: s })),
     })
   }
@@ -767,6 +894,51 @@ export async function callRoute(userId, id, name, req) {
   const handler = runtime.get(`${userId}:${id}`)?.registrations.routes[name]
   if (!handler) throw new Error('接口不存在')
   return await handler(req)
+}
+
+/** Find the public API endpoint matching `path` + `method` for a plugin.
+ *  Returns null when the path is not declared, otherwise an object describing
+ *  the endpoint, path params, handler and allowed methods. */
+export function resolveApiEndpoint(userId, id, path, method) {
+  const entry = runtime.get(`${userId}:${id}`)
+  if (!entry) return null
+  const actual = normalizeRequestPath(path)
+  if (!actual) return null
+
+  const matches = []
+  for (const endpoint of entry.registrations.api || []) {
+    const params = matchApiPath(endpoint.path, actual)
+    if (params) matches.push({ endpoint, params })
+  }
+  if (!matches.length) return null
+  // exact (literal) paths win over parameterised ones
+  matches.sort((a, b) => apiSpecificity(b.endpoint.path) - apiSpecificity(a.endpoint.path))
+
+  const wanted = String(method || 'GET').toUpperCase()
+  let chosen = matches.find((m) => m.endpoint.methods.includes(wanted))
+  // a HEAD request is satisfied by a GET endpoint; Express suppresses the body
+  if (!chosen && wanted === 'HEAD') {
+    chosen = matches.find((m) => m.endpoint.methods.includes('GET'))
+  }
+  const allowed = [...new Set(matches.flatMap((m) => m.endpoint.methods))]
+  const best = chosen || matches[0]
+  return {
+    endpoint: best.endpoint,
+    params: chosen ? chosen.params : best.params,
+    handler: entry.registrations.apis?.[best.endpoint.name] || null,
+    methodMatched: Boolean(chosen),
+    allowed,
+  }
+}
+
+export async function callApi(userId, id, name, req, reply) {
+  const handler = runtime.get(`${userId}:${id}`)?.registrations.apis?.[name]
+  if (!handler) throw new Error('接口不存在')
+  return await handler(req, reply)
+}
+
+export function getPluginToken(userId, id) {
+  return (getUserSetting(userId, 'plugin_tokens', {}) || {})[id] || ''
 }
 
 export function getPluginUi(userId, id) {

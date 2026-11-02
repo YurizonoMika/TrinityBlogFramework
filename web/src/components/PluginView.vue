@@ -6,7 +6,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/lib/api'
 import { auth } from '@/stores/auth'
 import { theme } from '@/stores/theme'
-import { alertDialog, confirmDialog } from '@/stores/dialog'
+import { alertDialog, confirmDialog, promptDialog } from '@/stores/dialog'
 import type { RuntimePlugin } from '@/lib/types'
 
 const props = defineProps<{
@@ -143,6 +143,7 @@ function makeApi(pluginId: string, owner: string) {
     dialog: {
       confirm: (opts: any) => confirmDialog(opts),
       alert: (opts: any) => alertDialog(opts),
+      prompt: (opts: any) => promptDialog(opts),
     },
     call(route: string, opts: { method?: string; body?: unknown; query?: Record<string, string> } = {}) {
       return api(`${base}/call/${route}${q(opts.query)}`, { method: opts.method || 'GET', body: opts.body }).then(unwrap)

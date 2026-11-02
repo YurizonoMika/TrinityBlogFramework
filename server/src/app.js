@@ -60,6 +60,10 @@ export function createApp() {
   // or authenticate with a Bearer token (API clients).
   app.use('/api', (req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next()
+    // Plugin API endpoints are called by external clients, not the SPA. They
+    // enforce their own auth (public/owner/admin/token) and CSRF rules in the
+    // plugin dispatcher, so the SPA-only guard must not reject them.
+    if (/^\/plugins\/[a-z0-9][a-z0-9-]*\/api\//.test(req.path)) return next()
     if ((req.headers.authorization || '').startsWith('Bearer ')) return next()
     if (req.get('x-requested-with') === 'XMLHttpRequest') return next()
     return res.status(403).json({ error: '请求被拒绝（缺少 CSRF 标记）' })

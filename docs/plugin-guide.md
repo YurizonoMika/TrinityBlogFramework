@@ -108,8 +108,9 @@ my-plugin/
 | `permissions` | string[] |  | 需要的敏感能力（见下）。安装时自动授予（受安装者权限范围限制，可在管理面板撤销） |
 | `minSdkVersion` | string |  | 要求的最低框架 SDK 版本（semver）。站点 SDK 低于该值时**拒绝安装/加载** |
 | `capabilities` | object |  | 能力声明（信息性，供管理面板展示） |
+| `api` | object[] |  | 对外 API 端点声明（见「对外 API 端点」） |
 
-> **SDK 版本**：框架当前 SDK 版本为 `server/src/plugins.js` 导出的 `SDK_VERSION`（当前 `1.0.0`）。
+> **SDK 版本**：框架当前 SDK 版本为 `server/src/sdk.js` 导出的 `SDK_VERSION`（当前 `1.3.0`）。
 > 插件用 `minSdkVersion` 声明所需的最低版本；安装（`inspect`/`import`）与运行时加载都会校验，
 > 不满足时给出「需要 SDK ≥ x，当前 y」的提示并拒绝。
 
@@ -122,7 +123,7 @@ my-plugin/
 |---|---|
 | `storage` | 服务端 `plugin.storage.*`（按用户私有）与 `plugin.shared.*`（站点级共享） |
 | `net:fetch` | 服务端 `plugin.fetch()` 发起外部 HTTP(S) 请求 |
-| `token` | 服务端 `plugin.token`（管理员为该插件填写的访问令牌） |
+| `token` | 服务端 `plugin.token`（管理员为该插件填写的访问令牌）；对外 API 的 `auth: "token"` 也依赖它 |
 | `posts:read` | 服务端 `plugin.getPosts()` 读取该用户的帖子 |
 | `moments:read` | 服务端 `plugin.getMoments()` 读取该用户的动态 |
 | `settings:read` | 服务端 `plugin.getSiteSettings()` / `plugin.getProfile()` |
@@ -138,6 +139,7 @@ my-plugin/
 
 ```js
 plugin.registerRoute(name, handler)          // 自定义接口 → 前端 api.call(name)
+plugin.registerApi(name, handler)            // 对外 API 端点 → /api/plugins/<id>/api/<path>
 plugin.registerCardSource(id, handler)       // 数据源 → 前端 api.data(id)
 plugin.registerWidget({ id, title })         // 首页小组件
 plugin.registerPage({ id, title, icon })     // 独立页面 /p/<pluginId>/<id>
@@ -174,6 +176,71 @@ plugin.registerRoute('greet', (req) => {
 
 plugin.registerCardSource('latest', () => plugin.getPosts({ limit: 3 }))
 ```
+
+### 对外 API 端点（SDK 1.2.0+）
+
+除了给插件自己的前端调用的 `registerRoute`，插件还可以向外部暴露 JSON API。端点在
+`plugin.json` 的 `api` 中**声明**（管理员安装/管理时即可看到），并在 `app.js` 中用
+`registerApi` **绑定**处理函数；未声明的处理函数会被忽略。
+
+`plugin.json`：
+
+```json
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "permissions": ["token"],
+  "api": [
+    { "name": "status", "path": "status", "methods": ["GET"], "auth": "public", "cors": true },
+    { "name": "webhook", "path": "hooks/:source", "methods": ["POST"], "auth": "token" }
+  ]
+}
+```
+
+`app.js`：
+
+```js
+plugin.registerApi('status', () => ({ ok: true, at: Date.now() }))
+
+plugin.registerApi('webhook', (req, reply) => {
+  if (!req.body?.event) return reply.status(400).json({ error: 'missing event' })
+  // req.params.source / req.headers / req.ip ...
+  return { received: true }
+})
+```
+
+请求地址为 `/api/plugins/<pluginId>/api/<path>`：
+
+```bash
+curl https://example.com/api/plugins/my-plugin/api/status
+curl -X POST https://example.com/api/plugins/my-plugin/api/hooks/github \
+  -H 'Authorization: Bearer <token>' -H 'Content-Type: application/json' \
+  -d '{"event":"push"}'
+```
+
+- 不带 `?username=` 时，`public` / `token` 端点默认指向**站点所有者**；`owner` / `admin`
+  端点指向**当前会话用户**（管理员可用 `?username=` 指定他人）。访问其他用户的公开端点时加 `?username=<用户名>`。
+- `path` 支持 `:param` 路径段（值在 `req.params` 中），不允许 `..`；同一 `path` 可声明多个方法。
+- `auth` 取值：
+
+  | 值 | 说明 |
+  |---|---|
+  | `public` | 任何人可调用；**仍需在插件管理中开启「对访客开放」** |
+  | `owner` | 插件所有者或管理员 |
+  | `admin` | 仅管理员 |
+  | `token` | 管理员在插件管理中填写的访问令牌，请求头 `Authorization: Bearer <token>`；`plugin.json` 必须申请 `token` 权限 |
+
+- `owner` / `admin` 端点若通过 Cookie 会话调用，写操作仍要求 `X-Requested-With: XMLHttpRequest`
+  （防 CSRF）；外部客户端请改用 Bearer 令牌。
+- `cors: true` 会返回 `Access-Control-Allow-Origin: *` 并处理 `OPTIONS` 预检（不支持跨域 Cookie）。
+- 返回值默认包成 `{ data: ... }`。需要自定义状态码/响应头时使用第二个参数 `reply`：
+  `reply.status(201).header('X-Foo', 'bar').json(data)`，或 `reply.send(text)` / `reply.end()`。
+- API 处理函数的 `req` 额外包含 `headers`（已移除 `cookie` / `authorization`）、
+  `endpoint`（`{ name, path, auth }`）与 `apiAuth`。
+- 公开端点没有内置限流，建议在 Nginx 或插件内自行限制请求频率。
+
+> `api` 的合法性在安装与加载时校验；非法声明会让插件加载失败并在管理面板显示原因。
+> 旧框架版本不认识 `api` 字段，因此使用该功能的插件应声明 `"minSdkVersion": "1.2.0"`。
 
 ### 通用属性 / 方法
 
@@ -270,6 +337,7 @@ export function mount(ctx) {
 api.isAdmin                              // 当前访问者是否已登录（注意：仅表示已登录）
 api.editor.insert(text) / close()        // 仅 kind='editor-tool'：插入编辑器 / 关闭弹窗
 api.dialog.confirm(opts) / alert(opts)   // M3 全局对话框
+api.dialog.prompt(opts)                  // 带输入框的 M3 对话框，返回 string | null
 api.call(route, { method, body, query }) // 调用 registerRoute
 api.data(source, query)                  // 读取 registerCardSource 数据源
 api.storage.url(name)                    // 存储文件 URL（<img>/<audio> 直接用）
@@ -279,6 +347,9 @@ api.storage.replace(name, file, onProgress)
 api.storage.remove(name) / removeBefore(date)
 ```
 
+> `api.dialog.prompt` 支持 `title` / `message` / `placeholder` / `inputType`（`text` | `password`）/
+> `value`（初始值）/ `confirmText` / `cancelText`；确定返回输入的字符串，取消返回 `null`。自 SDK 1.3.0 起提供。
+>
 > **网络限制**：站点使用严格的 CSP（`connect-src 'self'`），因此 `ui.js` **无法直接 `fetch` 第三方域名**。
 > 需要外部数据时，请通过 `api.call()` 让服务端 `plugin.fetch()`（`net:fetch`）代取。
 
@@ -361,6 +432,8 @@ if (plugin.hasPermission('storage')) {
    一律走服务端 `plugin.fetch`。
 5. **模板清洗。** `ui.ux` 在服务端与客户端都会被清洗（移除脚本 / 事件属性 / `javascript:`）。
 6. **SSRF 防护。** `plugin.fetch` 与站点取色请求都禁止访问回环 / 内网 / 云元数据地址。
+7. **对外 API 端点。** 端点必须在 `plugin.json` 的 `api` 中声明；`public` 还要求「对访客开放」，
+   `token` 要求 `token` 权限；`owner` / `admin` 的写操作有 CSRF 校验。
 
 > ⚠️ **关于沙箱的诚实说明**：`app.js` 运行在 Node `vm` 中，能约束常见误用（无 `require`/`process`），
 > 但**不是**强隔离的安全边界。因此「安装并启用插件」在信任模型上等同于「在服务器上运行其作者提供的代码」——
@@ -479,6 +552,9 @@ export function mount(ctx) {
 id · manifest · permissions · hasPermission(p) · log(...)
 
 registerRoute(name, handler(req))         req = { method, query, params, body, path, authed, isAdmin, viewer, ip }
+registerApi(name, handler(req, reply))    # 对外 API；需在 plugin.json 的 api 中声明
+                                          # req 额外含 headers / endpoint / apiAuth
+                                          # reply = status/header/type/json/send/end
 registerCardSource(id, handler(query))
 registerWidget/Page/Overlay/Topbar/PostModule/EditorTool(def)
 
@@ -496,7 +572,7 @@ storage.{list,stats,read,write,remove,readJSON,writeJSON,url}  # storage
 ctx = { pluginId, kind, id, root, host, owner, api }
 
 api.isAdmin
-api.dialog.{confirm,alert}
+api.dialog.{confirm,alert,prompt}
 api.call(route, {method, body, query})
 api.data(source, query)
 api.storage.{url, list, upload, replace, remove, removeBefore}
@@ -509,4 +585,5 @@ api.storage.{url, list, upload, replace, remove, removeBefore}
 > 进阶参考：`examples/interactive-form`（互动表单）演示了 **编辑器工具浮窗**（`ui: true` + `api.editor`）、
 > **帖子模块传参**（`ctx.data`）、以及 **站点级共享存储**（`plugin.shared`）的完整用法；
 > `examples/web-embed`（内嵌网页）演示了**帖子内嵌 iframe**（需站点 CSP 允许 `frame-src`）与
-> 加载前征询访问者的模式。
+> 加载前征询访问者的模式；`examples/public-api`（对外 API）演示了 `public` / `owner` / `admin` /
+> `token` 四种端点、CORS 预检与 `reply` 自定义响应。
