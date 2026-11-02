@@ -30,3 +30,6 @@ npm-debug.log*
 .idea/
 .vscode/
 *.local
+
+# promo page (local only, never committed or deployed)
+anim/
