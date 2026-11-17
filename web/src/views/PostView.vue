@@ -2,7 +2,7 @@
 <!-- Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika) -->
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/AppIcon.vue'
 import BaseDialog from '@/components/BaseDialog.vue'
@@ -33,10 +33,16 @@ const segments = computed(() => {
   )[] = []
   let last = 0
   let match: RegExpExecArray | null
+  // one set per post so duplicate headings across markdown segments still get
+  // unique ids
+  const usedHeadingIds = new Set<string>()
   MODULE_RE.lastIndex = 0
   while ((match = MODULE_RE.exec(content))) {
     if (match.index > last) {
-      out.push({ type: 'md', html: renderMarkdown(content.slice(last, match.index)) })
+      out.push({
+        type: 'md',
+        html: renderMarkdown(content.slice(last, match.index), usedHeadingIds),
+      })
     }
     let props: unknown = null
     if (match[3]) {
@@ -50,7 +56,7 @@ const segments = computed(() => {
     last = match.index + match[0].length
   }
   if (last < content.length) {
-    out.push({ type: 'md', html: renderMarkdown(content.slice(last)) })
+    out.push({ type: 'md', html: renderMarkdown(content.slice(last), usedHeadingIds) })
   }
   return out
 })
@@ -59,7 +65,65 @@ const authorInitial = computed(() =>
 )
 
 const coverRef = ref<HTMLElement | null>(null)
+const postBody = ref<HTMLElement | null>(null)
 const { update: updateParallax } = useParallax(coverRef, 0.3, 140)
+
+function decodeHash(value: string) {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function findHeadingTarget(fragment: string): HTMLElement | null {
+  const raw = decodeHash(fragment)
+  const byId = document.getElementById(raw)
+  if (byId) return byId
+
+  const root = postBody.value
+  if (!root) return null
+  const headings = Array.from(root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6'))
+  const norm = (value: string) => String(value || '').trim().replace(/\s+/g, '-')
+  const wanted = norm(raw)
+  const wantedLower = wanted.toLowerCase()
+  return (
+    headings.find((h) => (h.textContent || '').trim() === raw) ||
+    headings.find((h) => (h.textContent || '').trim().toLowerCase() === raw.toLowerCase()) ||
+    headings.find((h) => norm(h.textContent || '') === wanted) ||
+    headings.find((h) => norm(h.textContent || '').toLowerCase() === wantedLower) ||
+    null
+  )
+}
+
+function scrollToFragment(fragment: string, updateHistory = true): boolean {
+  if (!fragment) return false
+  const target = findHeadingTarget(fragment)
+  if (!target) return false
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  if (updateHistory) {
+    const hash = '#' + encodeURIComponent(decodeHash(fragment))
+    if (location.hash !== hash) history.pushState(null, '', hash)
+  }
+  return true
+}
+
+/** Markdown in-page links are plain <a href="#...">, so resolve them here.
+ *  Heading ids normally handle this natively; the text fallback keeps links
+ *  working when the author's fragment differs in case or punctuation. */
+function onPostClick(event: MouseEvent) {
+  const target = event.target as Element | null
+  const anchor = target?.closest ? (target.closest('a') as HTMLAnchorElement | null) : null
+  if (!anchor) return
+  const href = anchor.getAttribute('href') || ''
+  if (!href.startsWith('#') || href.length < 2) return
+  if (scrollToFragment(href.slice(1))) event.preventDefault()
+}
+
+function onHashChange() {
+  if (route.name !== 'post' || !location.hash) return
+  scrollToFragment(location.hash.slice(1), false)
+}
 
 async function load() {
   loading.value = true
@@ -70,6 +134,7 @@ async function load() {
     setPageTitle(post.value.title)
     await nextTick()
     updateParallax()
+    if (route.hash) scrollToFragment(route.hash.slice(1), false)
   } catch (e: any) {
     notFound.value = true
     setPageTitle('未找到')
@@ -78,8 +143,18 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  window.addEventListener('hashchange', onHashChange)
+})
+onUnmounted(() => window.removeEventListener('hashchange', onHashChange))
 watch(() => route.params.slug, load)
+watch(
+  () => route.hash,
+  (hash) => {
+    if (hash) nextTick(() => scrollToFragment(hash.slice(1), false))
+  }
+)
 
 async function toggleStatus() {
   if (!post.value) return
@@ -169,7 +244,7 @@ async function doDelete() {
         </div>
       </header>
 
-      <article class="md-container post-body">
+      <article ref="postBody" class="md-container post-body" @click="onPostClick">
         <template v-for="(seg, i) in segments" :key="i">
           <div v-if="seg.type === 'md'" class="md-content" v-html="seg.html" />
           <PluginModule
@@ -299,6 +374,15 @@ async function doDelete() {
 }
 .md-content :deep(h3) {
   font-size: 1.25rem;
+}
+/* keep anchor targets clear of the sticky top bar */
+.md-content :deep(h1),
+.md-content :deep(h2),
+.md-content :deep(h3),
+.md-content :deep(h4),
+.md-content :deep(h5),
+.md-content :deep(h6) {
+  scroll-margin-top: 88px;
 }
 .md-content :deep(p) {
   margin: 1em 0;

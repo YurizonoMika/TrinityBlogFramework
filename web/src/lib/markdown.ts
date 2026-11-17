@@ -19,23 +19,73 @@ function attr(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
-const renderer = new marked.Renderer()
-
-renderer.image = ({ href, title, text }) => {
-  const safeHref = attr(href)
-  const t = title ? ` title="${attr(title)}"` : ''
-  return `<figure class="md-figure"><img src="${safeHref}" alt="${attr(text || '')}"${t} loading="lazy" />${
-    text ? `<figcaption>${attr(text)}</figcaption>` : ''
-  }</figure>`
+/** Plain text of inline tokens, used to derive stable heading ids. */
+function inlineText(tokens: any[]): string {
+  let out = ''
+  for (const token of tokens || []) {
+    if (!token) continue
+    if (token.type === 'text' || token.type === 'codespan' || token.type === 'escape') {
+      out += token.text || ''
+    } else if (token.type === 'br') {
+      out += ' '
+    } else if (token.type === 'image') {
+      out += token.text || ''
+    } else if (token.tokens) {
+      out += inlineText(token.tokens)
+    } else if (token.type === 'html') {
+      out += String(token.text || token.raw || '').replace(/<[^>]*>/g, '')
+    } else {
+      out += token.raw || ''
+    }
+  }
+  return out
 }
 
-marked.use({ renderer })
+function headingSlug(text: string): string {
+  // preserve case and punctuation so `## ABC` can be linked as `#ABC` (the
+  // common authoring style); only whitespace is normalised
+  const base = String(text || '')
+    .replace(/[\u0000-\u001f\u007f]+/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return base || 'section'
+}
 
-export function renderMarkdown(source: string): string {
+function uniqueHeadingId(base: string, used: Set<string>): string {
+  let id = base
+  let n = 2
+  while (used.has(id)) id = `${base}-${n++}`
+  used.add(id)
+  return id
+}
+
+function createRenderer(usedIds: Set<string>) {
+  const renderer = new marked.Renderer()
+
+  renderer.image = ({ href, title, text }) => {
+    const safeHref = attr(href)
+    const t = title ? ` title="${attr(title)}"` : ''
+    return `<figure class="md-figure"><img src="${safeHref}" alt="${attr(text || '')}"${t} loading="lazy" />${
+      text ? `<figcaption>${attr(text)}</figcaption>` : ''
+    }</figure>`
+  }
+
+  // Without an id, in-page links like [ABC](#ABC) have no target and the
+  // browser falls back to the top of the page.
+  renderer.heading = function (this: any, { tokens, depth }) {
+    const id = uniqueHeadingId(headingSlug(inlineText(tokens)), usedIds)
+    return `<h${depth} id="${attr(id)}">${this.parser.parseInline(tokens)}</h${depth}>\n`
+  }
+
+  return renderer
+}
+
+export function renderMarkdown(source: string, usedIds: Set<string> = new Set()): string {
   if (!source) return ''
-  const html = marked.parse(source) as string
+  const html = marked.parse(source, { renderer: createRenderer(usedIds) }) as string
   return DOMPurify.sanitize(html, {
-    ADD_ATTR: ['target', 'rel', 'loading'],
+    ADD_ATTR: ['target', 'rel', 'loading', 'id'],
     ADD_TAGS: ['figure', 'figcaption'],
   })
 }
