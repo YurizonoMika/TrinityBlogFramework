@@ -632,8 +632,12 @@ function goBack() {
 }
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
+  row-gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 .tool-sep {
   width: 1px;

@@ -23,12 +23,14 @@ const accountRef = ref<HTMLElement | null>(null)
 // dynamic nav collapse: if the nav can't fit on one line, show a menu instead
 const topbarInner = ref<HTMLElement | null>(null)
 const navMeasure = ref<HTMLElement | null>(null)
-const brandRef = ref<HTMLElement | null>(null)
+const brandRef = ref<any>(null)
 const searchRef = ref<HTMLElement | null>(null)
 const actionsRef = ref<HTMLElement | null>(null)
+const writeRef = ref<any>(null)
 const topbarCenterRef = ref<HTMLElement | null>(null)
 const collapsed = ref(false)
 const topbarWidth = ref(0) // cached natural width of plugin topbar components (max seen)
+const writeWidth = ref(0) // cached width of the write button (it hides when collapsed)
 let collapseAt = 0 // container width at which we last collapsed (hysteresis)
 let resizeObserver: ResizeObserver | null = null
 
@@ -77,15 +79,31 @@ function measure() {
   // fluid component shrinking under pressure can't make us "fit" and pop back out
   const center = topbarCenterRef.value
   if (center && center.offsetParent !== null) {
-    topbarWidth.value = Math.max(topbarWidth.value, center.offsetWidth)
+    // scrollWidth keeps the natural content width even while flexbox squeezes
+    // the center to zero on a narrow window.
+    topbarWidth.value = Math.max(topbarWidth.value, center.offsetWidth, center.scrollWidth)
+  }
+  const brandEl = brandRef.value?.$el || brandRef.value
+  const brandWidth = Number(brandEl?.offsetWidth) || 0
+  if (!auth.user || !can('post')) {
+    // Do not reserve space for a write button this visitor does not have.
+    writeWidth.value = 0
+  } else {
+    const writeEl = writeRef.value?.$el || writeRef.value
+    if (writeEl && writeEl.offsetParent !== null) {
+      const measured = Number(writeEl.offsetWidth) || 0
+      writeWidth.value = Math.max(Number(writeWidth.value) || 0, measured)
+    }
   }
   const others =
-    (brandRef.value?.offsetWidth || 0) +
+    brandWidth +
     (searchRef.value?.offsetWidth || 0) +
     (actionsRef.value?.offsetWidth || 0) +
+    writeWidth.value +
     72
   const avail = bar.clientWidth
   const required = others + need + topbarWidth.value
+  if (!Number.isFinite(required)) return
   // hysteresis: collapse as soon as it doesn't fit, but only expand again once the
   // container grew past the collapse point AND there is comfortable headroom.
   // This keeps the tabs/topbar inside the menu while the page keeps getting narrower.
@@ -125,6 +143,14 @@ watch(
   }
 )
 
+watch(
+  () => [auth.user?.id, can('post')],
+  () => {
+    writeWidth.value = 0
+    nextTick(measure)
+  }
+)
+
 onMounted(() => {
   document.addEventListener('click', onDocClick)
   if (typeof ResizeObserver !== 'undefined' && topbarInner.value) {
@@ -147,7 +173,7 @@ onUnmounted(() => {
 
 <template>
   <header class="topbar">
-    <div ref="topbarInner" class="md-container topbar-inner">
+    <div ref="topbarInner" class="topbar-inner">
       <router-link ref="brandRef" class="brand" to="/" @click="mobileOpen = false">
         <img class="brand-logo" :src="logo" alt="" />
         <span class="brand-name">{{ title }}</span>
@@ -183,53 +209,55 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <button ref="searchRef" class="search-trigger" type="button" @click="openPalette()">
-        <AppIcon name="search" :size="18" />
-        <span class="search-label">搜索与快捷指令</span>
-        <kbd class="search-kbd">⌘K</kbd>
-      </button>
-
-      <div ref="actionsRef" class="actions">
-        <button class="icon-btn" :title="site.theme === 'dark' ? '浅色模式' : '深色模式'" @click="toggleTheme">
-          <AppIcon :name="site.theme === 'dark' ? 'light_mode' : 'dark_mode'" :size="20" />
+      <div class="topbar-right">
+        <button ref="searchRef" class="search-trigger" type="button" @click="openPalette()">
+          <AppIcon name="search" :size="18" />
+          <span class="search-label">搜索与快捷指令</span>
+          <kbd class="search-kbd">⌘K</kbd>
         </button>
 
-        <NotificationBell />
-
-        <router-link v-if="auth.user && can('post')" to="/write" class="btn btn-tonal btn-sm write-btn">
-          <AppIcon name="edit" :size="16" /><span>写文章</span>
-        </router-link>
-
-        <div v-if="auth.user" ref="accountRef" class="account">
-          <button class="avatar-trigger" @click.stop="accountOpen = !accountOpen">
-            <img v-if="auth.user.avatar" :src="auth.user.avatar" alt="" class="avatar sm" />
-            <span v-else class="avatar sm">{{ initial }}</span>
+        <div ref="actionsRef" class="actions">
+          <button class="icon-btn" :title="site.theme === 'dark' ? '浅色模式' : '深色模式'" @click="toggleTheme">
+            <AppIcon :name="site.theme === 'dark' ? 'light_mode' : 'dark_mode'" :size="20" />
           </button>
-          <div v-if="accountOpen" class="menu account-menu">
-            <div class="account-head">
-              <strong>{{ auth.user.display_name || auth.user.username }}</strong>
-              <span class="md-muted">@{{ auth.user.username }}</span>
-            </div>
-            <div class="menu-divider" />
-            <router-link class="menu-item" :to="`/user/${auth.user.username}`" @click="accountOpen = false">
-              <AppIcon name="person" :size="18" />我的主页
-            </router-link>
-            <router-link class="menu-item" to="/settings" @click="accountOpen = false">
-              <AppIcon name="settings" :size="18" />用户设置
-            </router-link>
-            <router-link class="menu-item" to="/write" @click="accountOpen = false">
-              <AppIcon name="add_box" :size="18" />新建帖子
-            </router-link>
-            <div class="menu-divider" />
-            <button class="menu-item danger" @click="doLogout">
-              <AppIcon name="logout" :size="18" />退出登录
-            </button>
-          </div>
-        </div>
 
-        <button v-show="collapsed" class="icon-btn mobile-toggle" @click="mobileOpen = !mobileOpen">
-          <AppIcon :name="mobileOpen ? 'close' : 'menu'" :size="22" />
-        </button>
+          <NotificationBell />
+
+          <router-link v-if="auth.user && can('post')" v-show="!collapsed" ref="writeRef" to="/write" class="btn btn-tonal btn-sm write-btn">
+            <AppIcon name="edit" :size="16" /><span>写文章</span>
+          </router-link>
+
+          <div v-if="auth.user" ref="accountRef" class="account">
+            <button class="avatar-trigger" @click.stop="accountOpen = !accountOpen">
+              <img v-if="auth.user.avatar" :src="auth.user.avatar" alt="" class="avatar sm" />
+              <span v-else class="avatar sm">{{ initial }}</span>
+            </button>
+            <div v-if="accountOpen" class="menu account-menu">
+              <div class="account-head">
+                <strong>{{ auth.user.display_name || auth.user.username }}</strong>
+                <span class="md-muted">@{{ auth.user.username }}</span>
+              </div>
+              <div class="menu-divider" />
+              <router-link class="menu-item" :to="`/user/${auth.user.username}`" @click="accountOpen = false">
+                <AppIcon name="person" :size="18" />我的主页
+              </router-link>
+              <router-link class="menu-item" to="/settings" @click="accountOpen = false">
+                <AppIcon name="settings" :size="18" />用户设置
+              </router-link>
+              <router-link class="menu-item" to="/write" @click="accountOpen = false">
+                <AppIcon name="add_box" :size="18" />新建帖子
+              </router-link>
+              <div class="menu-divider" />
+              <button class="menu-item danger" @click="doLogout">
+                <AppIcon name="logout" :size="18" />退出登录
+              </button>
+            </div>
+          </div>
+
+          <button v-show="collapsed" class="icon-btn mobile-toggle" @click="mobileOpen = !mobileOpen">
+            <AppIcon :name="mobileOpen ? 'close' : 'menu'" :size="22" />
+          </button>
+        </div>
       </div>
     </div>
 
@@ -287,7 +315,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  max-width: none;
   height: 68px;
+  padding-inline: clamp(16px, 2.5vw, 40px);
+  margin-inline: 0;
 }
 .brand {
   display: inline-flex;
@@ -299,6 +331,9 @@ onUnmounted(() => {
   font-size: 1.12rem;
   text-decoration: none;
   letter-spacing: -0.01em;
+}
+.brand-name {
+  max-width: min(32vw, 360px);
 }
 .brand:hover {
   text-decoration: none;
@@ -383,9 +418,6 @@ onUnmounted(() => {
   gap: 10px;
   height: 42px;
   padding: 0 14px;
-  /* keep the search + actions group right-aligned even when the center is collapsed */
-  margin-left: auto;
-  margin-right: 6px;
   border: 1px solid var(--md-outline-variant);
   border-radius: var(--md-shape-full);
   background: var(--md-surface-container-high);
@@ -413,10 +445,24 @@ onUnmounted(() => {
   border: 1px solid var(--md-outline-variant);
   color: var(--md-on-surface-variant);
 }
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-left: auto;
+}
 .actions {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: none;
+}
+
+@media (min-width: 761px) {
+  .brand {
+    flex: none;
+  }
 }
 .account {
   position: relative;
@@ -467,19 +513,21 @@ onUnmounted(() => {
   max-width: 100%;
 }
 
-@media (max-width: 760px) {
-  .write-btn {
-    display: none;
-  }
+@media (max-width: 1280px) {
   .search-trigger {
     min-width: 0;
     width: 40px;
     padding: 0;
     justify-content: center;
-    margin-right: 2px;
   }
   .search-label,
   .search-kbd {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .write-btn {
     display: none;
   }
   .brand-name {
