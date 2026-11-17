@@ -96,6 +96,11 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   border-color: var(--md-primary);
   box-shadow: inset 0 0 0 1px var(--md-primary);
 }
+/* Confirm/alert/prompt dialogs always sit above regular dialogs, even when a
+   teleported BaseDialog was inserted into <body> afterwards. */
+.scrim {
+  z-index: 11000;
+}
 /* the global .scrim/.dialog have keyframe animations; use the transition instead */
 .scrim,
 .dlg-card {
