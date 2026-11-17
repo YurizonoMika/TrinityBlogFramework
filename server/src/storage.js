@@ -2,7 +2,7 @@
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
 import { statfsSync, readdirSync, statSync, existsSync, rmSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename, extname, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DATA_DIR, UPLOAD_DIR, db, getSetting, primaryUserId } from './db.js'
 import { listPlugins, pluginStorageDir, listPluginStorage, pluginDir } from './plugins.js'
@@ -134,11 +134,150 @@ function listUploadFiles() {
       const p = join(dir, entry.name)
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name
       if (entry.isDirectory()) walk(p, rel)
-      else if (entry.isFile()) out.push({ path: rel, size: fileSize(p) })
+      else if (entry.isFile()) {
+        let mtime = 0
+        try {
+          mtime = statSync(p).mtimeMs
+        } catch {
+          /* ignore */
+        }
+        out.push({ path: rel, size: fileSize(p), mtime })
+      }
     }
   }
   walk(UPLOAD_DIR, '')
   return out
+}
+
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif'])
+
+/** Map every `/uploads/...` reference to the kinds of content using it. */
+function referenceIndex() {
+  const refs = collectReferences()
+  const map = new Map()
+  const add = (names, kind) => {
+    for (const name of names) {
+      const kinds = map.get(name) || []
+      if (!kinds.includes(kind)) kinds.push(kind)
+      map.set(name, kinds)
+    }
+  }
+  add(refs.posts, 'post')
+  add(refs.moments, 'moment')
+  add(refs.site, 'site')
+  return map
+}
+
+function uploadUrl(rel) {
+  return '/uploads/' + String(rel).split('/').map(encodeURIComponent).join('/')
+}
+
+/**
+ * Browse uploaded files with reference status, owner and metadata.
+ * Admins only — this spans every user's uploads.
+ */
+export function listUploadEntries(opts = {}) {
+  const orphanOnly = Boolean(opts.orphan)
+  const query = String(opts.query || '').trim().toLowerCase()
+  const type = String(opts.type || 'all')
+  const sort = String(opts.sort || 'time')
+  const limit = Math.min(200, Math.max(1, Number(opts.limit) || 40))
+  const offset = Math.max(0, Number(opts.offset) || 0)
+
+  const refs = referenceIndex()
+  const usersRows = db.prepare('SELECT id, username, display_name FROM users').all()
+  const userMap = new Map(usersRows.map((u) => [u.id, u]))
+  const legacyOwner = primaryUserId()
+
+  const all = listUploadFiles().map((f) => {
+    const kinds = refs.get(f.path) || []
+    const ownerMatch = f.path.match(/^users\/(\d+)\//)
+    const ownerId = ownerMatch ? Number(ownerMatch[1]) : legacyOwner
+    const owner = userMap.get(ownerId) || null
+    const ext = extname(f.path).toLowerCase()
+    const slash = f.path.lastIndexOf('/')
+    return {
+      path: f.path,
+      url: uploadUrl(f.path),
+      name: basename(f.path),
+      folder: slash >= 0 ? f.path.slice(0, slash) : '',
+      size: f.size,
+      mtime: f.mtime,
+      ext: ext.replace(/^\./, ''),
+      image: IMAGE_EXT.has(ext),
+      refs: kinds,
+      orphan: kinds.length === 0,
+      owner: owner
+        ? { id: owner.id, username: owner.username, name: owner.display_name || owner.username }
+        : null,
+    }
+  })
+
+  const totalBytes = all.reduce((sum, f) => sum + f.size, 0)
+  const orphans = all.filter((f) => f.orphan)
+  const orphanBytes = orphans.reduce((sum, f) => sum + f.size, 0)
+
+  let matched = all
+  if (orphanOnly) matched = matched.filter((f) => f.orphan)
+  if (type === 'image') matched = matched.filter((f) => f.image)
+  else if (type === 'other') matched = matched.filter((f) => !f.image)
+  if (query) matched = matched.filter((f) => f.path.toLowerCase().includes(query))
+
+  const collator = new Intl.Collator('zh-CN')
+  matched = [...matched].sort((a, b) => {
+    if (sort === 'size') return b.size - a.size || collator.compare(a.path, b.path)
+    if (sort === 'name') return collator.compare(a.path, b.path)
+    return b.mtime - a.mtime || collator.compare(a.path, b.path)
+  })
+
+  const matchedBytes = matched.reduce((sum, f) => sum + f.size, 0)
+  return {
+    files: matched.slice(offset, offset + limit),
+    total: matched.length,
+    bytes: matchedBytes,
+    offset,
+    limit,
+    all: { count: all.length, bytes: totalBytes },
+    orphan: { count: orphans.length, bytes: orphanBytes },
+  }
+}
+
+/** Resolve a client-supplied relative upload path, or null when it escapes the upload dir. */
+function safeUploadPath(rel) {
+  const clean = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '')
+  if (!clean || clean.split('/').includes('..')) return null
+  const base = resolve(UPLOAD_DIR)
+  const abs = resolve(base, clean)
+  return abs.startsWith(base + sep) ? abs : null
+}
+
+/** Delete uploaded files by relative path. Returns removed count/bytes and skipped count. */
+export function deleteUploadFiles(paths) {
+  let removed = 0
+  let bytes = 0
+  let skipped = 0
+  const seen = new Set()
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    const abs = safeUploadPath(raw)
+    if (!abs || seen.has(abs)) {
+      skipped++
+      continue
+    }
+    seen.add(abs)
+    try {
+      const st = statSync(abs)
+      if (!st.isFile()) {
+        skipped++
+        continue
+      }
+      rmSync(abs, { force: true })
+      removed++
+      bytes += st.size
+    } catch {
+      skipped++
+    }
+  }
+  return { removed, bytes, skipped }
 }
 
 function sumByPath(files, names) {

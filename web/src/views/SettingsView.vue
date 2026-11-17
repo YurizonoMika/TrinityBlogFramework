@@ -8,6 +8,7 @@ import AppIcon from '@/components/AppIcon.vue'
 import ImageCropper from '@/components/ImageCropper.vue'
 import BaseDialog from '@/components/BaseDialog.vue'
 import PluginView from '@/components/PluginView.vue'
+import StorageFilesDialog from '@/components/StorageFilesDialog.vue'
 import { api, uploadFile } from '@/lib/api'
 import { ensureUploadableImage } from '@/stores/imageCompress'
 import { removePluginNotifications } from '@/stores/notifications'
@@ -336,6 +337,12 @@ interface StorageOverview {
 
 const storage = ref<StorageOverview | null>(null)
 const storageLoading = ref(false)
+const filesDialog = reactive({ open: false, orphan: false })
+
+function openFiles(orphan = false) {
+  filesDialog.orphan = orphan
+  filesDialog.open = true
+}
 
 function fmtBytes(bytes: number): string {
   const n = Number(bytes) || 0
@@ -2662,6 +2669,12 @@ const PERMISSION_LABELS: Record<string, string> = {
 
               <div class="panel-actions">
                 <button class="btn btn-outlined" @click="loadStorage"><AppIcon name="refresh" :size="16" />刷新</button>
+                <button v-if="isAdminUser" class="btn btn-outlined" @click="openFiles(false)">
+                  <AppIcon name="folder" :size="16" />文件管理
+                </button>
+                <button v-if="isAdminUser" class="btn btn-outlined" @click="openFiles(true)">
+                  <AppIcon name="filter" :size="16" />查看孤立文件（{{ storage.uploads.orphanCount || 0 }}）
+                </button>
                 <button v-if="isAdminUser" class="btn btn-outlined" @click="openCompressImages"><AppIcon name="image" :size="16" />压缩图片</button>
                 <button class="btn btn-outlined" @click="cleanOrphans"><AppIcon name="delete" :size="16" />清理孤立文件</button>
                 <button class="btn btn-outlined" @click="vacuumDb"><AppIcon name="storage" :size="16" />整理数据库</button>
@@ -2669,6 +2682,13 @@ const PERMISSION_LABELS: Record<string, string> = {
             </template>
           </template>
         </section>
+
+    <StorageFilesDialog
+      :open="filesDialog.open"
+      :initial-orphan="filesDialog.orphan"
+      @close="filesDialog.open = false"
+      @changed="loadStorage"
+    />
 
     <!-- compress images -->
     <BaseDialog :open="compressDialog.open" title="压缩图片" @close="compressDialog.open = false">
@@ -3005,7 +3025,10 @@ const PERMISSION_LABELS: Record<string, string> = {
 }
 .panel-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   margin-top: 24px;
   padding-top: 20px;
   border-top: 1px solid var(--md-outline-variant);

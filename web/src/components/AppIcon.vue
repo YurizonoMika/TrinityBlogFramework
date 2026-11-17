@@ -12,6 +12,8 @@ const props = withDefaults(
 
 const PATHS: Record<string, string> = {
   home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
+  folder: 'M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z',
+  download: 'M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z',
   notifications:
     'M12 22c1.1 0 1.99-.9 1.99-2h-4c0 1.1.89 2 2.01 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5S10.5 3.17 10.5 4v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z',
   music_note: 'M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z',

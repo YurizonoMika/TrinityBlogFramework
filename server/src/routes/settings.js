@@ -13,6 +13,8 @@ import { themeExists } from '../themes.js'
 import { resetNintendoConfig, getNintendoServerConfig, setNintendoServerConfig } from '../nintendo.js'
 import {
   getStorageOverview,
+  listUploadEntries,
+  deleteUploadFiles,
   cleanOrphanUploads,
   clearPluginStorage,
   vacuumDatabase,
@@ -266,6 +268,33 @@ router.get('/storage', requireAuth, (req, res) => {
   const isAdmin = isAdminUser(req.user)
   const targetId = isAdmin && req.query.userId ? Number(req.query.userId) : req.user.id
   res.json(getStorageOverview({ userId: targetId, isAdmin }))
+})
+
+router.get('/storage/files', requireAuth, requireAdmin, (req, res) => {
+  res.json(
+    listUploadEntries({
+      orphan: req.query.orphan === '1' || req.query.orphan === 'true',
+      query: req.query.q,
+      type: req.query.type,
+      sort: req.query.sort,
+      offset: req.query.offset,
+      limit: req.query.limit,
+    })
+  )
+})
+
+router.delete('/storage/file', requireAuth, requireAdmin, (req, res) => {
+  const result = deleteUploadFiles([req.query.path])
+  if (!result.removed) return res.status(404).json({ error: '文件不存在或无法删除' })
+  res.json({ ...result, storage: getStorageOverview({ isAdmin: true }) })
+})
+
+router.post('/storage/files/delete', requireAuth, requireAdmin, (req, res) => {
+  const paths = req.body?.paths
+  if (!Array.isArray(paths) || !paths.length) return res.status(400).json({ error: '请选择要删除的文件' })
+  if (paths.length > 200) return res.status(400).json({ error: '一次最多删除 200 个文件' })
+  const result = deleteUploadFiles(paths)
+  res.json({ ...result, storage: getStorageOverview({ isAdmin: true }) })
 })
 
 router.post('/storage/clean-orphans', requireAuth, requireAdmin, (req, res) => {
