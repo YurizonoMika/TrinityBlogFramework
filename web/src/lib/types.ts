@@ -102,6 +102,8 @@ export interface RuntimePlugin {
   postModules: PluginPage[]
   editorTools: PluginEditorTool[]
   settings: PluginSettingsPanel[]
+  notificationSettings: PluginNotificationSetting[]
+  notifications: boolean
   api: PluginApiEndpoint[]
   cardSources: { id: string }[]
 }
@@ -111,6 +113,12 @@ export interface PluginSettingsPanel {
   title: string
   icon?: string
   adminOnly?: boolean
+}
+
+export interface PluginNotificationSetting {
+  id: string
+  title: string
+  icon: string
 }
 
 export interface InstalledPlugin {
@@ -139,6 +147,8 @@ export interface InstalledPlugin {
   editorTools: PluginEditorTool[]
   overlays: PluginOverlay[]
   topbars: PluginTopbar[]
+  notificationSettings: PluginNotificationSetting[]
+  notifications: boolean
   cardSources: { id: string }[]
 }
 export interface Card {

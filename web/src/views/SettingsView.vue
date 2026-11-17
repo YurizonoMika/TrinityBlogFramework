@@ -9,6 +9,8 @@ import ImageCropper from '@/components/ImageCropper.vue'
 import BaseDialog from '@/components/BaseDialog.vue'
 import PluginView from '@/components/PluginView.vue'
 import { api, uploadFile } from '@/lib/api'
+import { ensureUploadableImage } from '@/stores/imageCompress'
+import { removePluginNotifications } from '@/stores/notifications'
 import { auth, setUser } from '@/stores/auth'
 import {
   loadFullSettings,
@@ -26,7 +28,7 @@ import { notify } from '@/stores/toast'
 import { confirmDialog } from '@/stores/dialog'
 import { loadPlugins, plugins } from '@/lib/plugins'
 import { setTheme, setThemeScheme, loadTheme, theme as activeTheme } from '@/stores/theme'
-import type { InstalledPlugin, LinkItem, PluginApiEndpoint, ProfileTag, Theme } from '@/lib/types'
+import type { InstalledPlugin, LinkItem, PluginApiEndpoint, ProfileTag, RuntimePlugin, Theme } from '@/lib/types'
 
 const route = useRoute()
 const tab = ref<string>((route.query.tab as string) || 'profile')
@@ -48,6 +50,10 @@ function progressFinish() {
 }
 const installedPlugins = ref<InstalledPlugin[]>([])
 const pluginBusy = ref(false)
+const notificationMutes = ref<Set<string>>(new Set())
+const notificationSettingsPlugin = ref<RuntimePlugin | null>(null)
+const notificationSettingsId = ref('')
+const notificationPlugins = computed(() => plugins.list.filter((p) => p.notifications === true))
 // admins may manage another user's plugins via ?username=
 const pluginOwner = ref('')
 const pluginUsers = ref<{ id: number; username: string; display_name: string }[]>([])
@@ -98,6 +104,7 @@ async function onThemeImage(id: string, e: Event) {
   if (!file) return
   try {
     const res = await uploadFile(file)
+    if (!res) return
     themeOptions.value = { ...themeOptions.value, [id]: res.url }
   } catch (err: any) {
     notify(err.message || '上传失败', 'error')
@@ -202,6 +209,7 @@ const ALL_TABS = [
   { id: 'categories', label: '博客分类', icon: 'article', adminOnly: false },
   { id: 'activity', label: '活动集成', icon: 'history', adminOnly: false },
   { id: 'plugins', label: '拓展程序', icon: 'extension', adminOnly: false },
+  { id: 'notifications', label: '通知', icon: 'notifications', adminOnly: false },
   { id: 'users', label: '用户管理', icon: 'group', adminOnly: true },
   { id: 'account', label: '账户安全', icon: 'lock', adminOnly: false },
   { id: 'storage', label: '存储空间', icon: 'storage', adminOnly: false },
@@ -279,6 +287,7 @@ onMounted(() => {
   load()
   loadNintendoStatus()
   loadInstalledPlugins()
+  loadNotificationSettings()
   loadPluginUsers()
   loadThemes()
 })
@@ -787,6 +796,7 @@ async function onCropDone(blob: Blob) {
   const file = new File([blob], `${target || 'crop'}.jpg`, { type: blob.type || 'image/jpeg' })
   try {
     const res = await uploadFile(file)
+    if (!res) return
     if (target === 'avatar') {
       profile.avatar = res.url
       await saveProfile()
@@ -810,10 +820,13 @@ async function onCropDone(blob: Blob) {
   }
 }
 
-function onAvatarChange(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) startCrop(file, 'avatar')
-  ;(e.target as HTMLInputElement).value = ''
+async function onAvatarChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const prepared = await ensureUploadableImage(file)
+  if (prepared) startCrop(prepared, 'avatar')
 }
 
 async function saveProfile() {
@@ -870,16 +883,22 @@ async function saveCategoriesList() {
   }
 }
 
-function onSiteIconChange(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) startCrop(file, 'icon')
-  ;(e.target as HTMLInputElement).value = ''
+async function onSiteIconChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const prepared = await ensureUploadableImage(file)
+  if (prepared) startCrop(prepared, 'icon')
 }
 
-function onBannerChange(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) startCrop(file, 'banner')
-  ;(e.target as HTMLInputElement).value = ''
+async function onBannerChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const prepared = await ensureUploadableImage(file)
+  if (prepared) startCrop(prepared, 'banner')
 }
 
 async function clearBanner() {
@@ -892,10 +911,13 @@ async function clearBanner() {
   }
 }
 
-function onUserBannerChange(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) startCrop(file, 'user-banner')
-  ;(e.target as HTMLInputElement).value = ''
+async function onUserBannerChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const prepared = await ensureUploadableImage(file)
+  if (prepared) startCrop(prepared, 'user-banner')
 }
 
 async function clearUserBanner() {
@@ -945,6 +967,7 @@ async function onSeedChange(e: Event) {
   uploadingSeed.value = true
   try {
     const res = await uploadFile(file)
+    if (!res) return
     siteForm.themeSeed = res.url
     await saveSiteSettings({ themeSeed: res.url })
     notify('已从图片提取主题色', 'success')
@@ -1145,6 +1168,52 @@ async function loadInstalledPlugins() {
     /* ignore */
   }
 }
+
+async function loadNotificationSettings() {
+  try {
+    const res = await api<{ muted: string[] }>('/notifications/settings')
+    notificationMutes.value = new Set(Array.isArray(res.muted) ? res.muted : [])
+  } catch {
+    /* ignore */
+  }
+}
+
+async function toggleNotificationPlugin(plugin: RuntimePlugin) {
+  const next = new Set(notificationMutes.value)
+  if (next.has(plugin.id)) next.delete(plugin.id)
+  else next.add(plugin.id)
+  const previous = notificationMutes.value
+  notificationMutes.value = next
+  try {
+    const res = await api<{ muted: string[] }>('/notifications/settings', {
+      method: 'PUT',
+      body: { muted: [...next] },
+    })
+    notificationMutes.value = new Set(Array.isArray(res.muted) ? res.muted : [])
+    if (notificationMutes.value.has(plugin.id)) removePluginNotifications(plugin.id)
+  } catch (err: any) {
+    notificationMutes.value = previous
+    notify(err.message || '保存通知设置失败', 'error')
+  }
+}
+
+function openNotificationSettings(plugin: RuntimePlugin) {
+  if (!plugin.notificationSettings?.length) {
+    notify('该插件没有提供通知设置', 'error')
+    return
+  }
+  notificationSettingsPlugin.value = plugin
+  notificationSettingsId.value = plugin.notificationSettings[0].id
+}
+
+function closeNotificationSettings() {
+  notificationSettingsPlugin.value = null
+  notificationSettingsId.value = ''
+}
+
+watch(tab, (next) => {
+  if (next !== 'notifications') closeNotificationSettings()
+})
 
 /* ---------------- themes ---------------- */
 async function loadThemes() {
@@ -1423,6 +1492,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   'net:fetch': '发起网络请求',
   images: '访问图片资源',
   token: '使用访问令牌',
+  'notifications:send': '发送通知',
 }
 </script>
 
@@ -2341,6 +2411,78 @@ const PERMISSION_LABELS: Record<string, string> = {
           <h2 class="panel-title">{{ ps.setting.title }}</h2>
           <PluginView :plugin="ps.plugin" kind="settings" :id="ps.setting.id" />
         </section>
+
+        <!-- notifications -->
+        <section v-show="tab === 'notifications'" class="card">
+          <h2 class="panel-title">通知</h2>
+          <p class="md-muted">
+            管理已声明通知推送能力的插件。关闭开关后不会再收到该插件的通知；插件提供的通知选项可在「配置通知」中设置。
+          </p>
+          <div v-if="!notificationPlugins.length" class="empty-state">
+            暂无声明通知推送功能的插件。插件需在 plugin.json 的 permissions 中声明
+            <code>notifications:send</code> 才会出现在这里。
+          </div>
+          <div v-else class="notif-plugin-list">
+            <div v-for="p in notificationPlugins" :key="p.id" class="plugin-row">
+              <div class="plugin-row-main">
+                <div class="plugin-name">
+                  <AppIcon :name="p.notificationSettings?.[0]?.icon || 'extension'" :size="18" />
+                  <strong>{{ p.name }}</strong>
+                  <span class="md-muted">v{{ p.version }}</span>
+                </div>
+                <p class="md-muted">
+                  {{ p.notificationSettings?.length ? '此插件提供了通知设置。' : '此插件使用默认通知设置。' }}
+                </p>
+              </div>
+              <div class="plugin-row-actions">
+                <label class="switch" title="接收此插件的通知">
+                  <input
+                    type="checkbox"
+                    :checked="!notificationMutes.has(p.id)"
+                    @change="toggleNotificationPlugin(p)"
+                  />
+                  <span class="switch-track"><span class="switch-thumb" /></span>
+                  <span>接收通知</span>
+                </label>
+                <button class="btn btn-outlined btn-sm" @click="openNotificationSettings(p)">
+                  <AppIcon name="settings" :size="15" />配置通知
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <BaseDialog
+          :open="!!notificationSettingsPlugin"
+          :title="`通知设置 · ${notificationSettingsPlugin?.name || ''}`"
+          @close="closeNotificationSettings"
+        >
+          <template v-if="notificationSettingsPlugin">
+            <div
+              v-if="(notificationSettingsPlugin.notificationSettings || []).length > 1"
+              class="segmented"
+              style="margin-bottom: 14px"
+            >
+              <button
+                v-for="setting in notificationSettingsPlugin.notificationSettings"
+                :key="setting.id"
+                :class="{ active: notificationSettingsId === setting.id }"
+                @click="notificationSettingsId = setting.id"
+              >
+                {{ setting.title }}
+              </button>
+            </div>
+            <PluginView
+              :key="notificationSettingsId"
+              :plugin="notificationSettingsPlugin"
+              kind="notification-settings"
+              :id="notificationSettingsId"
+            />
+          </template>
+          <template #actions>
+            <button class="btn btn-filled" @click="closeNotificationSettings">完成</button>
+          </template>
+        </BaseDialog>
 
         <!-- account -->
         <section v-show="tab === 'account'" class="card">
@@ -3341,6 +3483,16 @@ code.preview-val {
   display: flex;
   gap: 8px;
   flex: none;
+}
+.notif-plugin-list {
+  margin-top: 16px;
+}
+.notif-plugin-list .plugin-row {
+  flex-wrap: wrap;
+}
+.notif-plugin-list .plugin-row-actions {
+  flex-wrap: wrap;
+  align-items: center;
 }
 .theme-option {
   display: flex;

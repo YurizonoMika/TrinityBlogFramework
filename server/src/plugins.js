@@ -4,6 +4,7 @@
 import vm from 'node:vm'
 import AdmZip from 'adm-zip'
 import { SDK_VERSION, compareSemver, sdkSatisfies } from './sdk.js'
+import { sendPluginNotification } from './notifications.js'
 import {
   readFileSync,
   writeFileSync,
@@ -11,6 +12,7 @@ import {
   existsSync,
   mkdirSync,
   rmSync,
+  renameSync,
   statSync,
   cpSync,
 } from 'node:fs'
@@ -43,6 +45,14 @@ const API_AUTHS = new Set(['public', 'owner', 'admin', 'token'])
 const API_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
 const API_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i
 const API_MAX_ENDPOINTS = 50
+
+/** A plugin declares server-side notification push by requesting this permission. */
+function declaresNotifications(manifest) {
+  return (
+    Array.isArray(manifest?.permissions) &&
+    manifest.permissions.map(String).includes('notifications:send')
+  )
+}
 
 /** Normalize + validate the `api` block of a plugin manifest. Throws on error. */
 function normalizeApiDeclarations(manifest) {
@@ -315,6 +325,7 @@ export function listPlugins(userId) {
       author: manifest.author || '',
       capabilities: manifest.capabilities || {},
       requestedPermissions: manifest.permissions || [],
+      notifications: declaresNotifications(manifest),
       api: reg?.api || safeApiDeclarations(manifest),
       hasUi: meta.hasUi,
       hasJs: meta.hasJs,
@@ -335,6 +346,7 @@ export function listPlugins(userId) {
       overlays: reg?.overlays || [],
       topbars: reg?.topbars || [],
       footer: reg?.footer || [],
+      notificationSettings: reg?.notificationSettings || [],
       cardSources: reg ? Object.keys(reg.cardSources).map((s) => ({ id: s })) : [],
     }
   })
@@ -403,18 +415,56 @@ export function importPlugin(userId, buffer) {
   }
 
   const dir = pluginDir(userId, id)
-  rmSync(dir, { recursive: true, force: true })
-  mkdirSync(dir, { recursive: true })
-  invalidatePluginCache(userId, id)
+  const storageDir = join(dir, 'storage')
+  const hadStorage = existsSync(storageDir)
+  // Updating a plugin must never delete the owner's uploaded files / plugin
+  // storage. Move it aside before replacing the code, then put it back.
+  const storageBackup = hadStorage
+    ? join(
+        userPluginsRoot(userId),
+        `.storage-backup-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      )
+    : ''
+  if (storageBackup) {
+    try {
+      renameSync(storageDir, storageBackup)
+    } catch (err) {
+      throw new Error(`无法保留插件存储：${String(err?.message || err)}`)
+    }
+  }
 
-  for (const item of zip.getEntries()) {
-    if (item.isDirectory) continue
-    let name = item.entryName.replace(/^\.?\//, '')
-    if (rootPrefix && name.startsWith(rootPrefix)) name = name.slice(rootPrefix.length)
-    if (!name || name.includes('..')) continue
-    const target = join(dir, name)
-    mkdirSync(dirname(target), { recursive: true })
-    writeFileSync(target, item.getData())
+  try {
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    invalidatePluginCache(userId, id)
+
+    for (const item of zip.getEntries()) {
+      if (item.isDirectory) continue
+      let name = item.entryName.replace(/^\.?\//, '')
+      if (rootPrefix && name.startsWith(rootPrefix)) name = name.slice(rootPrefix.length)
+      if (!name || name.includes('..')) continue
+      // User storage always wins over anything bundled in the package.
+      if (storageBackup && (name === 'storage' || name.startsWith('storage/'))) continue
+      const target = join(dir, name)
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, item.getData())
+    }
+
+    if (storageBackup) {
+      rmSync(storageDir, { recursive: true, force: true })
+      renameSync(storageBackup, storageDir)
+    }
+  } catch (err) {
+    // Do not leave the user's storage stranded if extraction failed midway.
+    if (storageBackup && existsSync(storageBackup)) {
+      try {
+        rmSync(storageDir, { recursive: true, force: true })
+        renameSync(storageBackup, storageDir)
+      } catch {
+        /* keep the backup for manual recovery */
+      }
+    }
+    throw err
   }
 
   // Installing is the owner's approval step: grant the permissions the plugin
@@ -546,6 +596,13 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
         adminOnly: def.adminOnly === true,
       })
     },
+    registerNotificationSettings(def = {}) {
+      registrations.notificationSettings.push({
+        id: String(def.id || 'notifications'),
+        title: def.title || manifest.name,
+        icon: def.icon || 'notifications',
+      })
+    },
     registerWidget(def) {
       registrations.widgets.push({ id: String(def.id || 'main'), title: def.title || manifest.name })
     },
@@ -610,6 +667,9 @@ function buildSandbox(userId, pluginId, manifest, dir, registrations) {
   }
   if (permissions.includes('token')) {
     api.token = (getUserSetting(userId, 'plugin_tokens', {}) || {})[pluginId] || ''
+  }
+  if (declaresNotifications(manifest) && permissions.includes('notifications:send')) {
+    api.notify = (payload = {}) => sendPluginNotification(userId, pluginId, payload)
   }
   if (permissions.includes('storage')) {
     api.storage = storageApiFor(userId, pluginId)
@@ -705,7 +765,7 @@ function loadPlugin(userId, id) {
     return markError(userId, id, String(err?.message || err))
   }
 
-  const registrations = { routes: {}, apis: {}, api, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], footer: [], postModules: [], editorTools: [], settings: [] }
+  const registrations = { routes: {}, apis: {}, api, cardSources: {}, pages: [], widgets: [], overlays: [], topbars: [], footer: [], postModules: [], editorTools: [], settings: [], notificationSettings: [] }
   try {
     const sandbox = buildSandbox(userId, id, manifest, dir, registrations)
     const context = vm.createContext(sandbox)
@@ -872,6 +932,8 @@ export function getRuntimeManifest(canSeePrivate, userId) {
       footer: registrations.footer,
       postModules: registrations.postModules,
       editorTools: registrations.editorTools,
+      notificationSettings: registrations.notificationSettings,
+      notifications: declaresNotifications(manifest),
       api: registrations.api || [],
       cardSources: Object.keys(registrations.cardSources).map((s) => ({ id: s })),
     })

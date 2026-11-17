@@ -5,7 +5,13 @@
 import { onMounted, onUnmounted } from 'vue'
 import AppIcon from './AppIcon.vue'
 
-const props = defineProps<{ open: boolean; title?: string; wide?: boolean; closeOnScrim?: boolean }>()
+const props = defineProps<{
+  open: boolean
+  title?: string
+  wide?: boolean
+  closeOnScrim?: boolean
+  hideClose?: boolean
+}>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 function onKey(e: KeyboardEvent) {
@@ -26,7 +32,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
         <div class="dialog" :class="{ 'dialog-wide': wide }" role="dialog" aria-modal="true">
           <header class="dialog-head">
             <h2 class="dialog-title">{{ title }}</h2>
-            <button class="icon-btn" @click="emit('close')">
+            <button v-if="!hideClose" class="icon-btn" @click="emit('close')">
               <AppIcon name="close" :size="22" />
             </button>
           </header>

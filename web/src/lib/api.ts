@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 YurizonoMika (https://github.com/YurizonoMika)
 
+import { ensureUploadableImage } from '@/stores/imageCompress'
+
 // Session is carried by an HttpOnly cookie — never readable by JS.
 
 export class ApiError extends Error {
@@ -49,8 +51,21 @@ export async function api<T = any>(path: string, options: Options = {}): Promise
   return data as T
 }
 
-export function uploadFile(file: File): Promise<{ url: string; name: string; size: number }> {
+export interface UploadedFile {
+  url: string
+  name: string
+  size: number
+}
+
+/**
+ * Upload an image. Oversized images are compressed first (with a progress
+ * prompt). Resolves null when the user declines compression or it cannot fit
+ * the server's 8 MiB limit.
+ */
+export async function uploadFile(file: File): Promise<UploadedFile | null> {
+  const prepared = await ensureUploadableImage(file)
+  if (!prepared) return null
   const form = new FormData()
-  form.append('file', file)
-  return api('/upload', { method: 'POST', body: form, raw: true })
+  form.append('file', prepared)
+  return api<UploadedFile>('/upload', { method: 'POST', body: form, raw: true })
 }

@@ -11,11 +11,14 @@ import CreditsDialog from './components/CreditsDialog.vue'
 import PluginOverlay from './components/PluginOverlay.vue'
 import PluginView from './components/PluginView.vue'
 import DialogHost from './components/DialogHost.vue'
+import ImageCompressDialog from './components/ImageCompressDialog.vue'
+import NotificationBanner from './components/NotificationBanner.vue'
 import AppIcon from './components/AppIcon.vue'
 import { auth, can } from '@/stores/auth'
 import { loadPublicSite, applyTheme, site } from '@/stores/site'
 import { loadPlugins, plugins } from '@/lib/plugins'
 import { loadTheme } from '@/stores/theme'
+import { loadNotifications, resetNotifications } from '@/stores/notifications'
 import { usePageOwner } from '@/lib/scope'
 
 const route = useRoute()
@@ -42,6 +45,7 @@ onMounted(async () => {
   } catch {
     /* server not reachable yet */
   }
+  loadNotifications().catch(() => {})
 })
 
 watch(
@@ -60,6 +64,17 @@ watch(scopeOwner, (u) => {
     .then(() => loadPublicSite(u))
     .catch(() => {})
 })
+
+// Notifications are pulled on page load, plus once when the signed-in identity
+// changes (login/logout). There is intentionally no polling.
+watch(
+  () => auth.user?.id,
+  (id, previous) => {
+    if (id === previous) return
+    resetNotifications()
+    loadNotifications().catch(() => {})
+  }
+)
 
 watch(
   () => site.site.accent,
@@ -107,10 +122,12 @@ watch(
     </router-link>
 
     <ToastHost />
+    <NotificationBanner />
     <CommandPalette />
     <CreditsDialog :open="creditsOpen" @close="creditsOpen = false" />
     <PluginOverlay />
     <DialogHost />
+    <ImageCompressDialog />
   </div>
 </template>
 

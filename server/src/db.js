@@ -45,6 +45,28 @@ db.exec(`
     PRIMARY KEY (user_id, key)
   );
 
+  CREATE TABLE IF NOT EXISTS notifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    plugin_id  TEXT NOT NULL DEFAULT '',
+    owner_id   INTEGER,
+    audience   TEXT NOT NULL DEFAULT 'user',
+    user_id    INTEGER,
+    icon       TEXT NOT NULL DEFAULT '',
+    title      TEXT NOT NULL,
+    content    TEXT NOT NULL DEFAULT '',
+    actions    TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_notifications_audience
+    ON notifications(audience, user_id, id);
+
+  CREATE TABLE IF NOT EXISTS notification_reads (
+    notification_id INTEGER NOT NULL,
+    user_id         INTEGER NOT NULL,
+    read_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (notification_id, user_id)
+  );
+
   CREATE TABLE IF NOT EXISTS posts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     title       TEXT NOT NULL,

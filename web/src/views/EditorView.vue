@@ -209,6 +209,7 @@ async function handleImageFile(file: File) {
   uploading.value = true
   try {
     const res = await uploadFile(file)
+    if (!res) return
     const alt = file.name.replace(/\.[^.]+$/, '')
     insertAtCursor(`\n![${alt}](${res.url})\n`)
     notify('图片已插入', 'success')
@@ -255,6 +256,7 @@ async function onCoverChange(e: Event) {
   uploading.value = true
   try {
     const res = await uploadFile(file)
+    if (!res) return
     form.cover = res.url
     notify('封面已更新', 'success')
   } catch (err: any) {

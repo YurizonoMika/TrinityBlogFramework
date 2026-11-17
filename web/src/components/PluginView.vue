@@ -6,6 +6,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/lib/api'
 import { auth } from '@/stores/auth'
 import { theme } from '@/stores/theme'
+import { pushLocalNotification } from '@/stores/notifications'
 import { alertDialog, confirmDialog, promptDialog } from '@/stores/dialog'
 import type { RuntimePlugin } from '@/lib/types'
 
@@ -14,7 +15,7 @@ const props = defineProps<{
   source?: string
   title?: string
   data?: unknown
-  kind?: 'widget' | 'page' | 'module' | 'overlay' | 'topbar' | 'footer' | 'editor-tool' | 'settings'
+  kind?: 'widget' | 'page' | 'module' | 'overlay' | 'topbar' | 'footer' | 'editor-tool' | 'settings' | 'notification-settings'
   id?: string
   /** when to mount the plugin: immediately, when scrolled near, or when idle */
   mount?: 'eager' | 'visible' | 'idle'
@@ -145,6 +146,8 @@ function makeApi(pluginId: string, owner: string) {
       alert: (opts: any) => alertDialog(opts),
       prompt: (opts: any) => promptDialog(opts),
     },
+    notifyLocal: (input: any) =>
+      pushLocalNotification({ ...(input || {}), pluginId }),
     call(route: string, opts: { method?: string; body?: unknown; query?: Record<string, string> } = {}) {
       return api(`${base}/call/${route}${q(opts.query)}`, { method: opts.method || 'GET', body: opts.body }).then(unwrap)
     },

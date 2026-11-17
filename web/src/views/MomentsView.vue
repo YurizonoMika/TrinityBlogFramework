@@ -100,6 +100,7 @@ async function onPickImages(e: Event) {
     for (const file of files) {
       if (composer.images.length >= MAX_IMAGES) break
       const res = await uploadFile(file)
+      if (!res) continue
       composer.images.push(res.url)
     }
   } catch (err: any) {

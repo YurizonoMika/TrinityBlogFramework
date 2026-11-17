@@ -110,7 +110,7 @@ my-plugin/
 | `capabilities` | object |  | 能力声明（信息性，供管理面板展示） |
 | `api` | object[] |  | 对外 API 端点声明（见「对外 API 端点」） |
 
-> **SDK 版本**：框架当前 SDK 版本为 `server/src/sdk.js` 导出的 `SDK_VERSION`（当前 `1.3.0`）。
+> **SDK 版本**：框架当前 SDK 版本为 `server/src/sdk.js` 导出的 `SDK_VERSION`（当前 `1.4.0`）。
 > 插件用 `minSdkVersion` 声明所需的最低版本；安装（`inspect`/`import`）与运行时加载都会校验，
 > 不满足时给出「需要 SDK ≥ x，当前 y」的提示并拒绝。
 
@@ -127,6 +127,7 @@ my-plugin/
 | `posts:read` | 服务端 `plugin.getPosts()` 读取该用户的帖子 |
 | `moments:read` | 服务端 `plugin.getMoments()` 读取该用户的动态 |
 | `settings:read` | 服务端 `plugin.getSiteSettings()` / `plugin.getProfile()` |
+| `notifications:send` | **声明**通知推送能力；只有声明此权限的插件会出现在「设置 → 通知」，并获得 `plugin.notify()`（全站/访客通知仅管理员插件可用） |
 
 ---
 
@@ -144,6 +145,7 @@ plugin.registerCardSource(id, handler)       // 数据源 → 前端 api.data(id
 plugin.registerWidget({ id, title })         // 首页小组件
 plugin.registerPage({ id, title, icon })     // 独立页面 /p/<pluginId>/<id>
 plugin.registerSettings({ id, title, icon, adminOnly }) // 设置项（adminOnly 时仅管理员可见）
+plugin.registerNotificationSettings({ id, title, icon }) // 「设置 → 通知」里的插件通知设置浮窗
 plugin.registerOverlay({ id, pages })        // 页面叠加层，pages: ['home','blog',...] 或 ['*']
 plugin.registerTopbar({ id, title })         // 顶栏中央插槽
 plugin.registerFooter({ id, title })         // 页脚版权栏下方插槽
@@ -242,6 +244,47 @@ curl -X POST https://example.com/api/plugins/my-plugin/api/hooks/github \
 > `api` 的合法性在安装与加载时校验；非法声明会让插件加载失败并在管理面板显示原因。
 > 旧框架版本不认识 `api` 字段，因此使用该功能的插件应声明 `"minSdkVersion": "1.2.0"`。
 
+### 站内通知（SDK 1.4.0+）
+
+需要 `notifications:send` 权限。**插件必须在 `plugin.json` 的 `permissions` 中声明该权限**；只在管理面板临时授权而未声明，不会出现在通知设置中，`plugin.notify` 也不会注入。插件可以用 `plugin.notify()` 向访客、指定用户或所有人发送一条通知：
+
+```js
+const result = plugin.notify({
+  audience: 'user',              // 'visitor' | 'user' | 'all'
+  userIds: ['alice'],           // audience='user' 时必填，支持用户名或用户 id
+  icon: 'star',                 // AppIcon 名称，或 /uploads/... / https://... 图片
+  title: '你的抽奖已开奖',
+  content: '你参与的「秋季抽奖」已经开奖，点击查看结果。',
+  actions: [
+    { label: '查看结果', url: '/blog/lottery-result' },
+    // 也可以写 https://... 外部链接
+  ],
+})
+// result.ids 是创建的通知 id 数组
+```
+
+- 服务端会**自动追加**一个 `kind: 'ack'` 的「我知道了」按钮；点击后该用户将通知标记为已读。`actions` 里最多再放 4 个链接按钮，`url` 只允许站内 `/...` 或 `http(s)://...`。
+- `audience: 'visitor'` 只发给未登录访客；`audience: 'user'` 发给 `userIds` 中的用户；`audience: 'all'` 发给所有访客和用户。
+- **管理员插件**可以发送三种通知；普通用户的插件只能发送给自己（`audience: 'user'` + 自身），避免跨用户打扰。
+- 通知只在页面加载时拉取一次，不会轮询；未读通知会先以右上角横幅出现，5 秒无操作后收进顶栏通知中心。
+- 用户可在「用户设置 → 通知」中关闭某个插件的通知。插件若想提供自己的通知选项，注册 `registerNotificationSettings({ id, title, icon })`，并用 `ctx.kind === 'notification-settings'` 渲染设置界面。
+- 浏览器端检测到的事件（如自动播放被阻止）可以用 `api.notifyLocal()` 发一条**仅当前浏览器可见**的通知，不写入服务端：
+  ```js
+  api.notifyLocal({
+    key: 'my-event',
+    icon: 'notifications',
+    title: '需要你的操作',
+    content: '浏览器阻止了操作，请点击下方按钮继续。',
+    actions: [{ label: '继续', kind: 'action', topic: 'my-plugin:continue' }],
+  })
+  // 在插件 ui.js 中监听：
+  window.addEventListener('homepage:notification-action', (event) => {
+    if (event.detail?.topic === 'my-plugin:continue') { /* 执行操作 */ }
+  })
+  ```
+  - 服务端 `plugin.notify()` 的 `actions` 也支持 `kind: 'action', topic`；点击时会在页面内派发 `homepage:notification-action`，不会自动导航。
+  - `api.notifyLocal()` 是浏览器本地通知，不是服务端推送，不需要 `notifications:send`，也不会出现在「设置 → 通知」的插件管理列表中。
+
 ### 通用属性 / 方法
 
 | 成员 | 说明 |
@@ -323,7 +366,7 @@ export function mount(ctx) {
 | 字段 | 说明 |
 |---|---|
 | `pluginId` | 插件 id |
-| `kind` | `widget` / `page` / `module` / `overlay` / `topbar` / `footer` / `editor-tool` / `settings` |
+| `kind` | `widget` / `page` / `module` / `overlay` / `topbar` / `footer` / `editor-tool` / `settings` / `notification-settings` |
 | `id` | 当前小组件 / 页面 / 模块 / 叠加层 / 顶栏 / 页脚 / 编辑器工具 / 设置项的 id |
 | `root` | shadow root（用 `root.querySelector`） |
 | `host` | 外层宿主元素 |
@@ -338,6 +381,7 @@ api.isAdmin                              // 当前访问者是否已登录（注
 api.editor.insert(text) / close()        // 仅 kind='editor-tool'：插入编辑器 / 关闭弹窗
 api.dialog.confirm(opts) / alert(opts)   // M3 全局对话框
 api.dialog.prompt(opts)                  // 带输入框的 M3 对话框，返回 string | null
+api.notifyLocal(opts)                    // 仅当前浏览器可见的站内通知（适合浏览器事件）
 api.call(route, { method, body, query }) // 调用 registerRoute
 api.data(source, query)                  // 读取 registerCardSource 数据源
 api.storage.url(name)                    // 存储文件 URL（<img>/<audio> 直接用）
@@ -363,12 +407,14 @@ api.storage.remove(name) / removeBefore(date)
 | **数据源** | `registerCardSource` | 首页添加「插件数据源」卡片后选择；`ui.ux` 可用 `{{ }}` 插值 |
 | **独立页面** | `registerPage` | 顶栏「页面」入口 / 直接访问 `/p/<pluginId>/<pageId>` |
 | **设置项** | `registerSettings` | 在「用户设置」左侧导航新增一项，内容以 `kind='settings'` 渲染；随插件启用对当前用户可见（`adminOnly: true` 时仅管理员可见，且服务端应校验 `req.isAdmin`） |
+| **通知设置** | `registerNotificationSettings` | 在「用户设置 → 通知」中为该插件显示「配置通知」按钮；点击后以 `kind='notification-settings'` 渲染插件自己的设置浮窗（仅声明 `notifications:send` 的插件会出现在该页） |
 | **叠加层** | `registerOverlay` | 在匹配的页面覆盖渲染；`pages` 用路由名（`home`/`blog`/`post`/`moments`/`settings`/`user-home`/`write`/`edit`/`plugin-page`）或 `*` |
 | **顶栏** | `registerTopbar` | 渲染在顶栏中央插槽 |
 | **页脚** | `registerFooter` | 渲染在底部版权栏下方（`kind='footer'`） |
 | **帖子模块** | `registerPostModule` | 在帖子内容中写 `[[plugin:<pluginId>/<moduleId>]]`，可带参数：`[[plugin:<id>/<mod>\|{"foo":1}]]` |
 | **编辑器工具** | `registerEditorTool` | 编辑器工具栏按钮。默认插入模块标记；声明 `ui: true` 时点击弹出插件浮窗（`kind='editor-tool'`），可用 `api.editor.insert()` 插入内容后 `close()` |
 | **接口** | `registerRoute` | 前端 `api.call(name)`；HTTP：`/api/plugins/<id>/call/<name>` |
+| **站内通知** | `plugin.notify()` | 需要**声明** `notifications:send`；接收者在顶栏通知中心查看 |
 | **静态资源** | 放在 `sources/` | `/api/plugins/<id>/asset/<path>` |
 
 ### 帖子模块
@@ -557,6 +603,8 @@ registerApi(name, handler(req, reply))    # 对外 API；需在 plugin.json 的 
                                           # reply = status/header/type/json/send/end
 registerCardSource(id, handler(query))
 registerWidget/Page/Overlay/Topbar/PostModule/EditorTool(def)
+registerNotificationSettings({ id, title, icon })
+notify({ audience, userIds, icon, title, content, actions })  # notifications:send
 
 getPosts({all,limit})          # posts:read
 getMoments({limit})            # moments:read
@@ -573,6 +621,7 @@ ctx = { pluginId, kind, id, root, host, owner, api }
 
 api.isAdmin
 api.dialog.{confirm,alert,prompt}
+# notification-settings 由「设置 → 通知」的插件配置按钮打开
 api.call(route, {method, body, query})
 api.data(source, query)
 api.storage.{url, list, upload, replace, remove, removeBefore}

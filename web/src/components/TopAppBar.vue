@@ -6,6 +6,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import PluginView from './PluginView.vue'
+import NotificationBell from './NotificationBell.vue'
 import { auth, logout, can } from '@/stores/auth'
 import { site, toggleTheme } from '@/stores/site'
 import { openPalette } from '@/stores/palette'
@@ -192,6 +193,8 @@ onUnmounted(() => {
         <button class="icon-btn" :title="site.theme === 'dark' ? '浅色模式' : '深色模式'" @click="toggleTheme">
           <AppIcon :name="site.theme === 'dark' ? 'light_mode' : 'dark_mode'" :size="20" />
         </button>
+
+        <NotificationBell />
 
         <router-link v-if="auth.user && can('post')" to="/write" class="btn btn-tonal btn-sm write-btn">
           <AppIcon name="edit" :size="16" /><span>写文章</span>
